@@ -1,6 +1,8 @@
 """
 Agent 模块 - 智能 Agent 实现
 """
+import threading
+
 from langchain_openai import ChatOpenAI
 from langchain.agents import create_agent
 # 使用相对导入
@@ -12,7 +14,8 @@ from core.llm import get_llm
 
 ALL_TOOLS = [get_weather, get_stock_price, search_local_knowledge]
 
-
+default_agent_singleton = None
+agent_singleton_lock = threading.Lock()
 
 # 系统提示词
 DEFAULT_SYSTEM_PROMPT = """你是一个乐于助人的AI助手，具有丰富的知识和耐心的态度。
@@ -42,6 +45,11 @@ def create_assistant(
     Returns:
         Agent 实例
     """
+    global default_agent_singleton
+
+    if tools is None and system_prompt is None and default_agent_singleton is not None:
+        return default_agent_singleton
+
     if tools is None:
         tools = ALL_TOOLS
 
@@ -54,5 +62,11 @@ def create_assistant(
         tools=tools,
         system_prompt=system_prompt
     )
+
+    if tools is ALL_TOOLS and system_prompt is DEFAULT_SYSTEM_PROMPT:
+        with agent_singleton_lock:
+            if default_agent_singleton is None:
+                default_agent_singleton = agent
+        return default_agent_singleton
 
     return agent
