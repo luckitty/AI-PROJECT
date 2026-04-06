@@ -3,6 +3,8 @@
   margin: 0;
   padding: 0;
   box-sizing: border-box;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(74, 120, 88, 0.38) transparent;
 }
 
 html,
@@ -13,29 +15,31 @@ body {
     sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  background-color: #eef4ef;
+  color: #2a3d2e;
 }
 
 #app {
   height: 100%;
 }
 
-/* 滚动条样式 */
+/* 滚动条：细、圆角、低对比 */
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
 }
 
 ::-webkit-scrollbar-track {
-  background: #f1f1f1;
+  background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #888;
-  border-radius: 4px;
+  background: rgba(74, 120, 88, 0.32);
+  border-radius: 100px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #555;
+  background: rgba(74, 120, 88, 0.48);
 }
 
 /* Markdown 样式 */
@@ -76,19 +80,20 @@ body {
 }
 
 .markdown code {
-  background-color: rgba(27, 31, 35, 0.05);
+  background-color: rgba(45, 80, 52, 0.08);
   padding: 0.2em 0.4em;
-  border-radius: 3px;
-  font-family: 'Courier New', monospace;
+  border-radius: 4px;
+  font-family: ui-monospace, 'Courier New', monospace;
   font-size: 85%;
 }
 
 .markdown pre {
-  background-color: #f6f8fa;
-  border-radius: 6px;
+  background-color: #e8f2ea;
+  border-radius: 8px;
   padding: 16px;
   overflow: auto;
   margin: 0.5em 0;
+  border: 1px solid #cfe0d2;
 }
 
 .markdown pre code {
@@ -98,14 +103,14 @@ body {
 }
 
 .markdown blockquote {
-  border-left: 4px solid #dfe2e5;
+  border-left: 4px solid #a8d4b8;
   padding-left: 1em;
   margin: 0.5em 0;
-  color: #6a737d;
+  color: #5a6e5c;
 }
 
 .markdown a {
-  color: #0366d6;
+  color: #3d7a56;
   text-decoration: none;
 }
 
@@ -121,27 +126,28 @@ body {
 
 .markdown th,
 .markdown td {
-  border: 1px solid #dfe2e5;
+  border: 1px solid #cfe0d2;
   padding: 8px 12px;
   text-align: left;
 }
 
 .markdown th {
-  background-color: #f6f8fa;
+  background-color: #e8f2ea;
   font-weight: 600;
 }
 
 .markdown hr {
   border: none;
-  border-top: 1px solid #e1e4e8;
+  border-top: 1px solid #cfe0d2;
   margin: 1em 0;
 }
 
 /* 代码高亮 */
 .hljs {
-  background-color: #f6f8fa;
+  background-color: #e8f2ea;
   padding: 16px;
-  border-radius: 6px;
+  border-radius: 8px;
+  border: 1px solid #cfe0d2;
 }
 
 /* 响应式 */

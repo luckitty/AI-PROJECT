@@ -14,35 +14,47 @@ import json
 
 from datetime import datetime
 
+from langchain_core.messages import AIMessage
 
-def stream_chunk_text(chunk) -> str:
-    """
-    LangGraph 在 stream_mode="messages" 时，每次 yield 一般是 (消息块, 元数据) 二元组。
-    消息块的 .content 可能是 str，也可能是多模态用的 list（如 type=text 的字典列表）。
-    这里统一转成一段可展示的纯文本；没有内容则返回空串（本拍不向客户端推 SSE）。
-    """
-    if chunk is None:
+
+def _message_content_to_text(content) -> str:
+    """把 AIMessage.content 转成可展示的纯文本（str / 多模态 list 均支持）。"""
+    if content is None:
         return ""
-    msg = chunk[0] if isinstance(chunk, tuple) and len(chunk) > 0 else chunk
-    # 获取msg的content 如果没有则返回None
-    raw = getattr(msg, "content", None)
-    if raw is None:
-        return ""
-    if isinstance(raw, str):
-        return raw
-    if isinstance(raw, list):
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
         parts = []
-        for block in raw:
+        for block in content:
             if isinstance(block, str):
                 parts.append(block)
             elif isinstance(block, dict):
-                print("block=========\n",block,"\n\n")
                 if block.get("type") == "text":
                     parts.append(block.get("text") or "")
                 elif "text" in block:
                     parts.append(str(block.get("text") or ""))
         return "".join(parts)
-    return str(raw)
+    return str(content)
+
+
+def stream_chunk_text(chunk) -> str:
+    """
+    解析 LangGraph ``stream_mode="messages"`` 的单次产出，得到应推给前端的文本。
+
+    - 入参多为 ``(message, metadata)``，先取 ``message``。
+    - 只输出 **AIMessage**（含流式用的 AIMessageChunk）：与 ``invoke`` 取最后一条助手回复语义一致。
+    - 若 AIMessage 仅有 ``tool_calls``、无可见正文，视为「路由到工具」的中间态，不推送。
+    """
+    if chunk is None:
+        return ""
+    msg = chunk[0] if isinstance(chunk, tuple) and len(chunk) > 0 else chunk
+    if not isinstance(msg, AIMessage):
+        return ""
+
+    text = _message_content_to_text(getattr(msg, "content", None))
+    if getattr(msg, "tool_calls", None) and not text.strip():
+        return ""
+    return text
 
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
@@ -81,8 +93,8 @@ async def chat(request: ChatRequest):
             {"messages": [{"role": "user", "content": request.message}]},
             config={"configurable": {"thread_id": session_id}},
         )
+        print("response===========响应 \n", response, "\n\n")
         reply = response["messages"][-1].content
-        print("chat===========返回结果 \n", datetime.now(),"\n\n")
 
         return ChatResponse(reply=reply, session_id=session_id)
 
