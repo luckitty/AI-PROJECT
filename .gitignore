@@ -21,6 +21,15 @@ yarn-error.log*
 
 # 构建输出
 frontend/dist/
+frontend/.vite/
+
+# Python 工具缓存
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
 
 # 环境变量
 .env
@@ -39,6 +48,11 @@ chroma_db/
 *.db
 *.sqlite
 *.sqlite3
+# SQLite WAL 模式（Chroma 等会产生）
+*.db-wal
+*.db-shm
+*.sqlite3-wal
+*.sqlite3-shm
 volumes/
 
 # 向量索引
@@ -57,3 +71,6 @@ Thumbs.db
 *.tmp
 *.temp
 .cache/
+
+# Jupyter
+.ipynb_checkpoints/
