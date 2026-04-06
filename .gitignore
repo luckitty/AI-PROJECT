@@ -39,9 +39,11 @@ chroma_db/
 *.db
 *.sqlite
 *.sqlite3
+volumes/
 
 # 向量索引
 faiss_index/
+
 
 # 日志
 *.log
