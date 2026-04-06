@@ -52,6 +52,13 @@
             <option value="deepseek-coder">DeepSeek Coder</option>
           </select>
         </div>
+        <div class="reply-mode-selector">
+          <label for="reply-mode">回复方式</label>
+          <select id="reply-mode" v-model="replyMode" class="model-select">
+            <option value="stream">流式</option>
+            <option value="plain">一次性</option>
+          </select>
+        </div>
       </div>
 
       <!-- 消息列表 -->
@@ -67,14 +74,17 @@
             {{ message.role === 'user' ? '👤' : '🤖' }}
           </div>
           <div class="message-content">
-            <div class="message-text" v-html="renderMessage(message.content)"></div>
-            <div class="message-meta">
-              <span class="message-time">{{ formatTime(message.timestamp) }}</span>
+            <div
+              v-if="message.role === 'assistant' && message.streaming"
+              class="message-text message-text-streaming"
+            >
+              <span class="stream-plain">{{ message.content }}</span><span class="stream-cursor">▍</span>
             </div>
+            <div v-else class="message-text" v-html="renderMessage(message.content || '')"></div>
           </div>
         </div>
 
-        <!-- 加载中提示 -->
+        <!-- 加载中提示 三个点 -->
         <div v-if="isTyping" class="message assistant">
           <div class="message-avatar">🤖</div>
           <div class="message-content">
@@ -118,7 +128,7 @@
 import { ref, nextTick, onMounted } from 'vue'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
-import { sendChatMessage } from '@/api/chat'
+import { sendChatMessage, sendChatMessageStream } from '@/api/chat'
 
 // 响应式数据
 const messages = ref([])
@@ -126,34 +136,33 @@ const userInput = ref('')
 const isTyping = ref(false)
 const sidebarCollapsed = ref(false)
 const selectedModel = ref('deepseek-chat')
+const replyMode = ref('stream')
 const messagesContainer = ref(null)
 const inputRef = ref(null)
 
 // 聊天历史
 const chatHistory = ref([])
 const currentChatId = ref(null)
+// 与后端 LangGraph thread_id 一致，用于多轮对话
+const sessionId = ref(null)
 
 // 切换侧边栏
 const toggleSidebar = () => {
   sidebarCollapsed.value = !sidebarCollapsed.value
 }
 
-// 渲染消息（支持 Markdown）
+// 流式进行中用纯文本分支，不走 marked（见模板 message.streaming）
 const renderMessage = (content) => {
+  if (!content) return ''
   const html = marked.parse(content)
   return DOMPurify.sanitize(html)
 }
 
-// 格式化时间
-const formatTime = (timestamp) => {
-  const date = new Date(timestamp)
-  const now = new Date()
-  const diff = now - date
-
-  if (diff < 60000) return '刚刚'
-  if (diff < 3600000) return `${Math.floor(diff / 60000)} 分钟前`
-  if (diff < 86400000) return `${Math.floor(diff / 3600000)} 小时前`
-  return date.toLocaleDateString()
+const scrollToBottom = async () => {
+  await nextTick()
+  if (messagesContainer.value) {
+    messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight
+  }
 }
 
 // 处理 Enter 键
@@ -164,71 +173,220 @@ const handleEnter = (e) => {
   sendMessage()
 }
 
-// 发送消息
-const sendMessage = async () => {
-  if (!userInput.value.trim() || isTyping.value) return
-
+/** 提交用户句、三个点、session；失败返回 null */
+async function startUserTurn() {
+  if (!userInput.value.trim() || isTyping.value) return null
   const userMessage = {
     role: 'user',
     content: userInput.value.trim(),
     timestamp: Date.now()
   }
-
   messages.value.push(userMessage)
   userInput.value = ''
   isTyping.value = true
-
+  if (!sessionId.value) sessionId.value = crypto.randomUUID()
   await scrollToBottom()
+  return userMessage
+}
 
-  try {
-    // 调用 API 发送消息
-    const response = await sendChatMessage(userMessage.content, selectedModel.value)
+async function endUserTurn() {
+  isTyping.value = false
+  await scrollToBottom()
+  saveChatHistory()
+}
 
-    const assistantMessage = {
-      role: 'assistant',
-      content: response,
-      timestamp: Date.now()
+function pushErrorAssistant(msg) {
+  messages.value.push({
+    role: 'assistant',
+    content: msg,
+    timestamp: Date.now()
+  })
+}
+
+function formatSendError(e) {
+  return '抱歉，发生错误：' + (e.message || '未知错误')
+}
+
+/**
+ * 流式回复的「打字机」：SSE 可能一次推一大段，先放进 pending，再按帧写入气泡。
+ * 返回 { push, flushRest, finalize, abortForError }，供 sendMessageStream 调用。
+ */
+function createStreamTypewriter() {
+  let aiIndex = -1
+  let pending = ''
+  let rafId = null
+  const PUMP = 3 // 每帧显示字数（越小越慢）
+  const DRAIN = 12 // 流结束后加快排空 pending
+
+  const stopRaf = () => {
+    if (rafId != null) {
+      cancelAnimationFrame(rafId)
+      rafId = null
     }
+  }
 
-    messages.value.push(assistantMessage)
-  } catch (error) {
-    console.error('发送消息失败:', error)
-    const errorMessage = {
-      role: 'assistant',
-      content: '抱歉，发生错误：' + (error.message || '未知错误'),
-      timestamp: Date.now()
-    }
-    messages.value.push(errorMessage)
-  } finally {
+  const pump = () => {
+    rafId = null
+    if (aiIndex < 0 || pending.length === 0) return
+    const row = messages.value[aiIndex]
+    const n = Math.min(PUMP, pending.length)
+    row.content += pending.slice(0, n)
+    pending = pending.slice(n)
+    void nextTick(() => scrollToBottom())
+    if (pending.length > 0) rafId = requestAnimationFrame(pump)
+  }
+
+  const ensureRow = () => {
+    if (aiIndex >= 0) return
     isTyping.value = false
-    await scrollToBottom()
+    messages.value.push({
+      role: 'assistant',
+      content: '',
+      timestamp: Date.now(),
+      streaming: true
+    })
+    aiIndex = messages.value.length - 1
+  }
 
-    // 保存聊天历史
-    saveChatHistory()
+  return {
+    push(text) {
+      ensureRow()
+      pending += text
+      if (rafId == null) rafId = requestAnimationFrame(pump)
+    },
+    /** 流结束：停掉 pump，把队列里剩余字符尽快画完 */
+    async flushRest() {
+      stopRaf()
+      if (aiIndex < 0) return
+      await new Promise((resolve) => {
+        const tick = () => {
+          if (pending.length === 0) {
+            resolve()
+            return
+          }
+          const row = messages.value[aiIndex]
+          const n = Math.min(DRAIN, pending.length)
+          row.content += pending.slice(0, n)
+          pending = pending.slice(n)
+          void nextTick(() => scrollToBottom())
+          requestAnimationFrame(tick)
+        }
+        tick()
+      })
+    },
+    /** 出错：停 RAF，把 pending 一次性拼上，避免半截丢字 */
+    abortForError() {
+      stopRaf()
+      if (aiIndex >= 0 && pending) {
+        const row = messages.value[aiIndex]
+        if (row) row.content += pending
+        pending = ''
+      }
+      isTyping.value = false
+      if (aiIndex >= 0) {
+        const row = messages.value[aiIndex]
+        row.streaming = false
+        if (!String(row.content || '').trim()) messages.value.splice(aiIndex, 1)
+      }
+    },
+    /** 正常收尾：关 streaming，若界面仍空则用完整串兜底 */
+    finalize(full) {
+      if (aiIndex < 0) {
+        isTyping.value = false
+        messages.value.push({
+          role: 'assistant',
+          content: full || '',
+          timestamp: Date.now()
+        })
+        return
+      }
+      const row = messages.value[aiIndex]
+      if (!String(row.content || '').trim() && full) row.content = full
+      row.streaming = false
+    }
   }
 }
 
-// 滚动到底部
-const scrollToBottom = async () => {
-  await nextTick()
-  if (messagesContainer.value) {
-    messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight
+/** 一次性：await sendChatMessage，整段回复；等待时三个点 */
+const sendMessagePlain = async () => {
+  const userMessage = await startUserTurn()
+  if (!userMessage) return
+  try {
+    const reply = await sendChatMessage(userMessage.content, selectedModel.value, sessionId.value)
+    isTyping.value = false
+    messages.value.push({
+      role: 'assistant',
+      content: reply,
+      timestamp: Date.now()
+    })
+  } catch (e) {
+    console.error(e)
+    isTyping.value = false
+    pushErrorAssistant(formatSendError(e))
+  } finally {
+    await endUserTurn()
   }
+}
+
+/** 流式：sendChatMessageStream + 打字机；首包到之前三个点 */
+const sendMessageStream = async () => {
+  const userMessage = await startUserTurn()
+  if (!userMessage) return
+  const tw = createStreamTypewriter()
+  try {
+    const full = await sendChatMessageStream(
+      userMessage.content,
+      selectedModel.value,
+      sessionId.value,
+      tw.push
+    )
+    await tw.flushRest()
+    tw.finalize(full)
+  } catch (e) {
+    console.error(e)
+    tw.abortForError()
+    pushErrorAssistant(formatSendError(e))
+  } finally {
+    await endUserTurn()
+  }
+}
+
+const sendMessage = async () => {
+  if (replyMode.value === 'plain') await sendMessagePlain()
+  else await sendMessageStream()
 }
 
 // 开始新对话
 const startNewChat = () => {
   if (messages.value.length > 0) {
-    // 保存当前对话
-    const title = messages.value[0].content.substring(0, 20) + '...'
-    chatHistory.value.unshift({
-      id: Date.now(),
-      title,
-      messages: [...messages.value]
-    })
+    const firstText = messages.value[0].content
+    const title = firstText.length > 20 ? `${firstText.substring(0, 20)}...` : firstText
+    const existing =
+      currentChatId.value != null
+        ? chatHistory.value.find((c) => c.id === currentChatId.value)
+        : null
+
+    if (existing) {
+      // 当前会话已在侧边栏：只更新内容与 session，避免重复插入
+      existing.title = title
+      existing.messages = [...messages.value]
+      if (sessionId.value) {
+        existing.sessionId = sessionId.value
+      }
+    } else if (currentChatId.value == null) {
+      // 仅「未归档」的临时会话才新增一条历史
+      chatHistory.value.unshift({
+        id: Date.now(),
+        sessionId: sessionId.value,
+        title,
+        messages: [...messages.value]
+      })
+    }
+    saveChatHistory()
   }
   messages.value = []
   currentChatId.value = null
+  sessionId.value = null
 }
 
 // 切换对话
@@ -237,12 +395,24 @@ const switchChat = (chatId) => {
   if (chat) {
     currentChatId.value = chatId
     messages.value = [...chat.messages]
+    sessionId.value = chat.sessionId || crypto.randomUUID()
+    if (!chat.sessionId) {
+      chat.sessionId = sessionId.value
+      saveChatHistory()
+    }
   }
 }
 
 // 删除对话
 const deleteChat = (index) => {
+  const removed = chatHistory.value[index]
   chatHistory.value.splice(index, 1)
+  if (removed && currentChatId.value === removed.id) {
+    messages.value = []
+    sessionId.value = null
+    currentChatId.value = null
+  }
+  saveChatHistory()
 }
 
 // 清空所有历史
@@ -251,6 +421,8 @@ const clearAllHistory = () => {
     chatHistory.value = []
     messages.value = []
     currentChatId.value = null
+    sessionId.value = null
+    saveChatHistory()
   }
 }
 
@@ -288,417 +460,4 @@ marked.setOptions({
 })
 </script>
 
-<style scoped>
-.chat-container {
-  display: flex;
-  height: 100vh;
-  background-color: #f5f5f5;
-}
-
-/* 侧边栏 */
-.sidebar {
-  width: 260px;
-  background-color: #2d2d2d;
-  color: #ffffff;
-  display: flex;
-  flex-direction: column;
-  transition: width 0.3s ease;
-}
-
-.sidebar.collapsed {
-  width: 60px;
-}
-
-.sidebar-header {
-  padding: 20px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  border-bottom: 1px solid #404040;
-}
-
-.logo {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-size: 18px;
-  font-weight: bold;
-}
-
-.logo-icon {
-  font-size: 24px;
-}
-
-.collapse-btn {
-  background: none;
-  border: none;
-  color: #ffffff;
-  font-size: 20px;
-  cursor: pointer;
-  padding: 5px;
-}
-
-.new-chat-section {
-  padding: 15px;
-}
-
-.new-chat-btn {
-  width: 100%;
-  padding: 12px;
-  background-color: #4a4a4a;
-  color: #ffffff;
-  border: none;
-  border-radius: 8px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-size: 14px;
-  transition: background-color 0.2s;
-}
-
-.new-chat-btn:hover {
-  background-color: #5a5a5a;
-}
-
-.new-chat-btn .icon {
-  font-size: 18px;
-}
-
-.chat-history {
-  flex: 1;
-  overflow-y: auto;
-  padding: 10px;
-}
-
-.history-item {
-  padding: 12px;
-  border-radius: 8px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 5px;
-  transition: background-color 0.2s;
-}
-
-.history-item:hover {
-  background-color: #404040;
-}
-
-.history-item.active {
-  background-color: #3a3a3a;
-  border-left: 3px solid #4a9eff;
-}
-
-.chat-title {
-  font-size: 14px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  flex: 1;
-}
-
-.delete-btn {
-  background: none;
-  border: none;
-  color: #888;
-  cursor: pointer;
-  padding: 5px;
-  font-size: 16px;
-}
-
-.delete-btn:hover {
-  color: #ff6b6b;
-}
-
-.sidebar-footer {
-  padding: 15px;
-  border-top: 1px solid #404040;
-}
-
-.clear-history-btn {
-  width: 100%;
-  padding: 12px;
-  background-color: #4a4a4a;
-  color: #ffffff;
-  border: none;
-  border-radius: 8px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-size: 14px;
-}
-
-.clear-history-btn:hover {
-  background-color: #5a5a5a;
-}
-
-/* 主内容区 */
-.main-content {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  background-color: #ffffff;
-}
-
-.top-bar {
-  padding: 15px 20px;
-  border-bottom: 1px solid #e0e0e0;
-  display: flex;
-  justify-content: flex-end;
-}
-
-.model-select {
-  padding: 8px 12px;
-  border: 1px solid #e0e0e0;
-  border-radius: 6px;
-  background-color: #ffffff;
-  font-size: 14px;
-  cursor: pointer;
-}
-
-.messages-container {
-  flex: 1;
-  overflow-y: auto;
-  padding: 20px;
-}
-
-.welcome-message {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  height: 100%;
-  text-align: center;
-  color: #666;
-}
-
-.welcome-icon {
-  font-size: 64px;
-  margin-bottom: 20px;
-}
-
-.welcome-message h1 {
-  font-size: 28px;
-  margin-bottom: 10px;
-  color: #333;
-}
-
-.message {
-  display: flex;
-  gap: 12px;
-  margin-bottom: 24px;
-  animation: fadeIn 0.3s ease;
-}
-
-@keyframes fadeIn {
-  from {
-    opacity: 0;
-    transform: translateY(10px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-.message.user {
-  flex-direction: row-reverse;
-}
-
-.message-avatar {
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  background-color: #f0f0f0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 20px;
-  flex-shrink: 0;
-}
-
-.message.assistant .message-avatar {
-  background-color: #4a9eff;
-}
-
-.message-content {
-  max-width: 70%;
-  background-color: #f5f5f5;
-  padding: 12px 16px;
-  border-radius: 12px;
-}
-
-.message.user .message-content {
-  background-color: #4a9eff;
-  color: #ffffff;
-}
-
-.message-text {
-  line-height: 1.6;
-  word-wrap: break-word;
-}
-
-.message-text :deep(pre) {
-  background-color: #f0f0f0;
-  padding: 12px;
-  border-radius: 6px;
-  overflow-x: auto;
-  margin: 8px 0;
-}
-
-.message-text :deep(code) {
-  background-color: #f0f0f0;
-  padding: 2px 6px;
-  border-radius: 3px;
-  font-family: 'Courier New', monospace;
-  font-size: 14px;
-}
-
-.message-text :deep(p) {
-  margin: 8px 0;
-}
-
-.message-text :deep(ul),
-.message-text :deep(ol) {
-  padding-left: 20px;
-  margin: 8px 0;
-}
-
-.message-text :deep(li) {
-  margin: 4px 0;
-}
-
-.message-text :deep(blockquote) {
-  border-left: 4px solid #4a9eff;
-  padding-left: 12px;
-  margin: 8px 0;
-  color: #666;
-}
-
-.message-meta {
-  display: flex;
-  align-items: center;
-  margin-top: 8px;
-  font-size: 12px;
-  color: #999;
-}
-
-.message.user .message-meta {
-  justify-content: flex-end;
-}
-
-/* 输入指示器 */
-.typing-indicator {
-  display: flex;
-  gap: 4px;
-  padding: 10px;
-}
-
-.typing-indicator span {
-  width: 8px;
-  height: 8px;
-  background-color: #999;
-  border-radius: 50%;
-  animation: typing 1.4s infinite;
-}
-
-.typing-indicator span:nth-child(2) {
-  animation-delay: 0.2s;
-}
-
-.typing-indicator span:nth-child(3) {
-  animation-delay: 0.4s;
-}
-
-@keyframes typing {
-  0%, 60%, 100% {
-    transform: translateY(0);
-  }
-  30% {
-    transform: translateY(-10px);
-  }
-}
-
-/* 输入区域 */
-.input-container {
-  border-top: 1px solid #e0e0e0;
-  padding: 20px;
-}
-
-.input-wrapper {
-  display: flex;
-  gap: 12px;
-  align-items: flex-end;
-}
-
-.message-input {
-  flex: 1;
-  padding: 12px 16px;
-  border: 1px solid #e0e0e0;
-  border-radius: 8px;
-  font-size: 14px;
-  font-family: inherit;
-  resize: none;
-  outline: none;
-  transition: border-color 0.2s;
-  max-height: 200px;
-}
-
-.message-input:focus {
-  border-color: #4a9eff;
-}
-
-.send-btn {
-  width: 48px;
-  height: 48px;
-  background-color: #4a9eff;
-  color: #ffffff;
-  border: none;
-  border-radius: 8px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 24px;
-  transition: background-color 0.2s;
-}
-
-.send-btn:hover {
-  background-color: #3a8eef;
-}
-
-.send-btn:disabled {
-  background-color: #ccc;
-  cursor: not-allowed;
-}
-
-.input-footer {
-  margin-top: 8px;
-  text-align: center;
-}
-
-.hint {
-  font-size: 12px;
-  color: #999;
-}
-
-/* 响应式设计 */
-@media (max-width: 768px) {
-  .sidebar {
-    position: absolute;
-    left: -260px;
-    z-index: 1000;
-  }
-
-  .sidebar.collapsed {
-    left: 0;
-  }
-
-  .message-content {
-    max-width: 85%;
-  }
-}
-</style>
+<style scoped src="../styles/chatInterface.css"></style>

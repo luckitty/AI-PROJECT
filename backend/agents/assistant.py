@@ -5,6 +5,7 @@ import threading
 
 from langchain_openai import ChatOpenAI
 from langchain.agents import create_agent
+from langgraph.checkpoint.memory import InMemorySaver
 # 使用相对导入
 from tools.weather_tool import get_weather
 from tools.stock_tool import get_stock_price
@@ -14,17 +15,22 @@ from core.llm import get_llm
 
 ALL_TOOLS = [get_weather, get_stock_price, search_local_knowledge]
 
+# 与 LangGraph Agent 共用：按 thread_id（对应前端的 session_id）隔离多轮对话状态
+agent_checkpointer = InMemorySaver()
+
 default_agent_singleton = None
 agent_singleton_lock = threading.Lock()
 
 # 系统提示词
-DEFAULT_SYSTEM_PROMPT = """你是一个乐于助人的AI助手，具有丰富的知识和耐心的态度。
-你可以使用以下工具来帮助用户：
-1. 查询天气
-2. 查询本地知识库（search_local_knowledge）
-3. 查询股票价格
+DEFAULT_SYSTEM_PROMPT = """你是一个乐于助人的 AI 助手，回答专业、友好。
 
-请以专业但友好的方式回答用户的问题。
+你附带若干工具，但**是否调用、何时调用、调用哪一个，完全由你根据用户意图自行判断**：
+- 闲聊、常识、编程思路、解题说明等，你能可靠回答的，**直接回答，不必调用工具**。
+- 用户**明确要某地实时天气**时，使用天气工具；不要对无关问题调用天气工具。
+- 用户**明确要查询股票价格**时，使用股票工具。
+- 仅当问题**明显依赖本地知识库中的专有资料**（例如知识库里的人物传记、内部文档类事实）时，再使用 search_local_knowledge；通用百科类问题无需检索知识库。
+
+不要为「显得专业」而滥用工具；能直接答就直答，需要外部或库内事实再调用。
 如果问题涉及代码，请提供清晰、格式良好的示例。
 """
 
@@ -60,7 +66,8 @@ def create_assistant(
     agent = create_agent(
         model=llm,
         tools=tools,
-        system_prompt=system_prompt
+        system_prompt=system_prompt,
+        checkpointer=agent_checkpointer,
     )
 
     if tools is ALL_TOOLS and system_prompt is DEFAULT_SYSTEM_PROMPT:
@@ -70,3 +77,16 @@ def create_assistant(
         return default_agent_singleton
 
     return agent
+
+
+def clear_agent_session(thread_id: str) -> None:
+    """按 thread_id 清除内存中的 Agent 检查点（与前端 session_id 一致）。"""
+    if not thread_id:
+        return
+    agent_checkpointer.storage.pop(thread_id, None)
+    write_keys = [k for k in agent_checkpointer.writes if k and k[0] == thread_id]
+    for k in write_keys:
+        del agent_checkpointer.writes[k]
+    blob_keys = [k for k in agent_checkpointer.blobs if k and k[0] == thread_id]
+    for k in blob_keys:
+        del agent_checkpointer.blobs[k]

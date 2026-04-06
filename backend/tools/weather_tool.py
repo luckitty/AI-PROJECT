@@ -8,7 +8,7 @@ from core.config import AMAP_KEY
 
 @tool
 def get_weather(city:str) -> str:
-  """"【强制调用】当你需要获取任何地点、任何日期的实时天气、温度或气候信息时，必须使用此工具。"""
+  """查询指定城市的实时天气（实况温度、气象状况）。仅当用户需要真实天气数据时调用；与天气无关时不要调用。"""
   url="https://restapi.amap.com/v3/weather/weatherInfo"
   params={
     "key":AMAP_KEY,

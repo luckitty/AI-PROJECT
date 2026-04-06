@@ -11,7 +11,7 @@ def get_llm(
     model: str = MODEL_NAME,
     temperature: float = 0.7,
     max_tokens: int = 2000,
-    streaming: bool = False
+    streaming: bool = True
 ) -> ChatOpenAI:
     """
     获取 LLM 实例

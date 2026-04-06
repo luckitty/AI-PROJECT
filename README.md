@@ -1,171 +1,147 @@
-# AI Project - DeepSeek Chat
+# DeepSeek Chat（AI 助手）
 
-一个基于 LangChain 和 Vue3 的 AI 聊天助手项目。
+基于 **FastAPI + Vue 3 + Vite** 的对话应用：前端为类 DeepSeek 的聊天界面；后端使用 **LangGraph Agent**（DeepSeek 兼容接口），支持**工具调用**与**多轮会话**（`session_id` / `thread_id`），并集成 **RAG 本地知识库**（Chroma + 混合检索 + 可选重排）。
 
-## 项目结构
+---
+
+## 功能概览
+
+| 能力 | 说明 |
+|------|------|
+| 对话 | 非流式 `POST /api/chat`、流式 `POST /api/chat/stream`（SSE，`data: {"content":...}`） |
+| 多轮记忆 | LangGraph `InMemorySaver`，与前端 `session_id` 对齐为 `thread_id` |
+| 工具 | 天气（高德）、股票、`search_local_knowledge`（RAG，由模型按需调用） |
+| RAG | `backend/data` 下 `.txt` 入库；BM25（jieba）+ 向量 MMR，RRF 融合；可选 CrossEncoder 精排 |
+| 前端 | Markdown 渲染（marked + DOMPurify）、流式打字机、侧边栏会话、模型与「一次性 / 流式」切换 |
+
+---
+
+## 仓库结构
 
 ```
 ai-project/
-├── backend/                    # 后端代码
-│   ├── api/                    # API 路由
-│   │   └── chat.py            # 聊天 API
-│   ├── agents/                 # Agent 模块
-│   │   └── assistant.py       # AI 助手 Agent
-│   ├── chains/                 # Chain 模块
-│   │   └── chat_chain.py      # 对话链
-│   ├── tools/                  # 工具模块
-│   │   └── __init__.py        # 工具定义
-│   ├── core/                   # 核心配置
-│   │   ├── config.py          # 配置管理
-│   │   └── llm.py             # LLM 实例
-│   └── main.py                 # FastAPI 主入口
-├── frontend/                   # 前端代码
+├── backend/
+│   ├── main.py                 # FastAPI 入口（默认 :8000）
+│   ├── api/chat.py             # /api/chat、/stream、/history、/models
+│   ├── agents/assistant.py     # LangGraph create_agent + 单例 + checkpointer
+│   ├── chains/chat_chain.py    # RunnableWithMessageHistory（历史清理等）
+│   ├── core/config.py          # 环境变量
+│   ├── core/llm.py             # ChatOpenAI（DeepSeek）
+│   ├── tools/                  # 天气、股票、search_txt_tool（RAG）
+│   ├── rag/                    # 嵌入、加载、混合检索、Chroma、重排
+│   ├── memory/                 # 预留 / Redis 等扩展
+│   └── data/                   # RAG 原始 txt（可增删后按需重建向量库）
+├── frontend/
 │   ├── src/
-│   │   ├── api/               # API 接口
-│   │   ├── components/        # Vue 组件
-│   │   └── styles/            # 样式文件
-│   ├── index.html
-│   ├── package.json
-│   └── vite.config.js
-├── data/                       # 数据文件
-├── docs/                       # 文档
-├── .env                        # 环境变量
+│   │   ├── components/ChatInterface.vue
+│   │   ├── api/chat.js         # axios + fetch(SSE)，VITE_API_BASE_URL
+│   │   └── styles/
+│   ├── vite.config.js          # 开发端口 3000，@ → src
+│   └── package.json
+├── test_rag.py                 # 根目录 RAG 实验脚本（独立跑通检索链路时可参考）
+├── .env                        # 本地创建（勿提交），见下表
 └── README.md
 ```
 
-## 功能特性
+运行后端时工作目录一般为 **`backend/`**；Chroma 持久化目录默认为 **`backend/chroma_db`**（见 `rag/vectorstores/chroma_client.py`）。
 
-- **AI 对话** - 支持 DeepSeek 大模型对话
-- **工具调用** - 支持天气查询、日程安排、股票查询等工具
-- **历史记忆** - 支持对话历史记录
-- **流式输出** - 支持打字机效果输出
-- **现代化 UI** - 类似 DeepSeek 的聊天界面
+---
 
-## 快速开始
+## 环境要求
 
-### 1. 安装依赖
+- **Node.js** 建议 **18+**（Vite 5）
+- **Python** 建议 **3.11+**
+- 网络：需能访问 DeepSeek API；RAG 嵌入使用**智谱**时需能访问智谱 API
 
-#### 后端依赖
+---
+
+## 环境变量
+
+在项目根目录创建 `.env`（或仅在运行前导出），后端通过 `python-dotenv` 加载（`backend/core/config.py`）。
+
+| 变量 | 说明 |
+|------|------|
+| `DEEPSEEK_API_KEY` | 必填：对话模型 |
+| `DEEPSEEK_BASE_URL` | 可选，默认 `https://api.deepseek.com` |
+| `MODEL_NAME` | 可选，默认 `deepseek-chat` |
+| `ZHIPU_API_KEY` | RAG 向量嵌入（`ZhipuAIEmbeddings`）需要 |
+| `AMAP_KEY` | 天气工具（高德 REST）需要 |
+| `USE_RERANKER` | 设为 `0` / `false` 可关闭 CrossEncoder 精排，加快启动、省资源 |
+| `RAG_FORCE_REBUILD` | 设为 `1` / `true` 时强制用文档重建 Chroma（否则复用 `chroma_db`） |
+| `LANGSMITH_API_KEY` / `LANGSMITH_TRACING` | 可选，LangSmith 追踪 |
+
+前端可选：`VITE_API_BASE_URL`（默认 `http://localhost:8000`）。
+
+---
+
+## 安装与运行
+
+### 后端
+
 ```bash
-pip install fastapi uvicorn langchain langchain-openai python-dotenv requests
+cd backend
+# 建议使用虚拟环境，并安装依赖（示例，可按实际环境调整）
+pip install fastapi uvicorn python-dotenv pydantic requests
+pip install langchain langchain-openai langchain-community langchain-chroma langgraph
+pip install rank-bm25 jieba numpy sentence-transformers zhipuai
+python main.py
 ```
 
-#### 前端依赖
+服务默认：**http://127.0.0.1:8000**，交互文档：**http://127.0.0.1:8000/docs**。
+
+### 前端
+
 ```bash
 cd frontend
 npm install
-```
-
-### 2. 配置环境变量
-
-创建 `.env` 文件：
-```env
-DEEPSEEK_API_KEY=your_api_key_here
-DEEPSEEK_BASE_URL=https://api.deepseek.com
-MODEL_NAME=deepseek-chat
-```
-
-### 3. 启动服务
-
-#### 启动后端
-```bash
-cd backend
-python main.py
-```
-后端将运行在 `http://localhost:8000`
-
-#### 启动前端
-```bash
-cd frontend
-npm run dev
-```
-前端将运行在 `http://localhost:3000`
-
-### 4. 访问应用
-
-打开浏览器访问 `http://localhost:3000` 即可使用。
-
-## API 文档
-
-启动后端后，访问 `http://localhost:8000/docs` 查看 API 文档。
-
-### 主要接口
-
-- `POST /api/chat` - 发送聊天消息
-- `POST /api/chat/stream` - 流式聊天
-- `DELETE /api/chat/history/{session_id}` - 清空对话历史
-- `GET /api/chat/models` - 获取可用模型列表
-
-## 模块说明
-
-### Backend 模块
-
-| 模块 | 说明 |
-|------|------|
-| `core/config.py` | 配置管理，加载环境变量 |
-| `core/llm.py` | LLM 实例管理 |
-| `tools/` | 工具定义（天气、日程、股票等） |
-| `agents/assistant.py` | AI 助手 Agent，支持工具调用 |
-| `chains/chat_chain.py` | 对话链，支持历史记忆 |
-| `api/chat.py` | 聊天 API 路由 |
-
-### Frontend 模块
-
-| 模块 | 说明 |
-|------|------|
-| `src/components/ChatInterface.vue` | 聊天界面组件 |
-| `src/api/chat.js` | API 接口封装 |
-
-## 扩展功能
-
-### 添加新工具
-
-在 `backend/tools/__init__.py` 中添加新的工具函数：
-
-```python
-from langchain.tools import tool
-
-@tool
-def my_new_tool(param: str) -> str:
-    """工具描述"""
-    # 实现逻辑
-    return "结果"
-
-# 添加到工具列表
-ALL_TOOLS.append(my_new_tool)
-```
-
-### 自定义 Agent
-
-在 `backend/agents/assistant.py` 中修改系统提示词和工具列表。
-
-## 开发
-
-### 后端开发
-```bash
-cd backend
-# 开发模式启动（支持热重载）
-python main.py
-```
-
-### 前端开发
-```bash
-cd frontend
 npm run dev
 ```
 
-### 构建前端
+开发服务器默认：**http://localhost:3000**（见 `vite.config.js`）。
+
+### 生产构建前端
+
 ```bash
 cd frontend
 npm run build
+# 产物在 frontend/dist，由任意静态服务器或 Nginx 托管；需将 API 指到后端（`VITE_API_BASE_URL`）
 ```
+
+---
+
+## API 摘要
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `POST` | `/api/chat` | 非流式，请求体含 `message`、`model`、`session_id` |
+| `POST` | `/api/chat/stream` | SSE 流式；行内 JSON `content`，结束 `data: [DONE]` |
+| `DELETE` | `/api/chat/history/{session_id}` | 清空链路与 Agent 检查点中该会话 |
+| `GET` | `/api/chat/models` | 返回前端可选模型列表 |
+
+---
+
+## 架构说明（简）
+
+1. **Agent**：`create_assistant()` 使用 `create_agent` + `InMemorySaver`；同一进程内对默认配置复用**单例 Agent**，减少重复构建。
+2. **工具**：模型根据提示词自行决定是否调用；`search_local_knowledge` 首次调用时会 `ensure_rag()` 加载文档并建/打开 Chroma。
+3. **会话**：请求中的 `session_id` 会传入 `configurable.thread_id`，与前端侧边栏会话一致。
+4. **前端流式**：`ChatInterface.vue` 对 SSE 分片做队列 + 帧动画，避免大块文本一次性贴出（打字机观感）。
+
+---
+
+## RAG 与数据
+
+- 将 `.txt` 放入 **`backend/data/`**（或按 `loader` 中路径调整）。
+- 首次检索或重建时可能较慢（嵌入 + 可选重排模型下载）；生产可预热或关闭重排。
+- 根目录 **`test_rag.py`** 用于独立验证检索与向量流程，与主服务解耦。
+
+---
 
 ## 注意事项
 
-1. 确保 `.env` 文件配置正确
-2. DeepSeek API 需要 API Key
-3. 后端服务需要先启动
-4. 生产环境建议使用数据库存储对话历史
+1. 对话依赖 **DeepSeek API Key**；天气、RAG 嵌入分别依赖 **高德**、**智谱** Key，未配置时对应能力会失败或不可用。
+2. 历史与检查点均在**内存**中，进程重启后丢失；生产环境可替换为持久化 Checkpointer / 数据库。
+3. CORS 当前为宽松配置（`allow_origins=["*"]`），上线请按域名收紧。
 
 ## License
 

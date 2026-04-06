@@ -29,7 +29,7 @@ def ensure_rag():
 
 @tool
 def search_local_knowledge(user_query: str) -> str:
-    """从本地文本知识库检索与用户问题相关的片段（BM25+向量混合）。回答人物、作品、经历等事实性问题前应先调用本工具。"""
+    """从本地文本知识库检索与问题相关的片段（BM25+向量混合）。仅当回答需要知识库中的专有内容时再调用；通用知识或闲聊不要调用。"""
     k = 4
     ensure_rag()
     docs = hybrid_retriever.retrieve(user_query, k=k)
