@@ -478,6 +478,7 @@
 }
 
 .typing-indicator {
+  margin-top: 10px;
   display: flex;
   gap: 5px;
   padding: 8px 4px;

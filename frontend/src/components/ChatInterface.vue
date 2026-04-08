@@ -154,6 +154,15 @@ const chatHistory = ref([])
 const currentChatId = ref(null)
 // 与后端 LangGraph thread_id 一致，用于多轮对话
 const sessionId = ref(null)
+const userId = ref(null)
+// 长期记忆依赖稳定 user_id；持久化到 localStorage，避免刷新后变成新用户
+const storedUserId = localStorage.getItem('chatUserId')
+if (storedUserId) {
+  userId.value = storedUserId
+} else {
+  userId.value = crypto.randomUUID()
+  localStorage.setItem('chatUserId', userId.value)
+}
 
 // 切换侧边栏
 const toggleSidebar = () => {
@@ -334,7 +343,7 @@ const sendMessagePlain = async () => {
   const userMessage = await startUserTurn()
   if (!userMessage) return
   try {
-    const reply = await sendChatMessage(userMessage.content, DEFAULT_CHAT_MODEL, sessionId.value)
+    const reply = await sendChatMessage(userMessage.content, DEFAULT_CHAT_MODEL, sessionId.value, userId.value)
     isTyping.value = false
     messages.value.push({
       role: 'assistant',
@@ -352,6 +361,7 @@ const sendMessagePlain = async () => {
 
 /** 流式：sendChatMessageStream + 打字机；首包到之前三个点 */
 const sendMessageStream = async () => {
+  console.log("sendMessageStream===========流式发送消息 \n", userId.value, "\n\n")
   const userMessage = await startUserTurn()
   if (!userMessage) return
   const tw = createStreamTypewriter()
@@ -360,6 +370,7 @@ const sendMessageStream = async () => {
       userMessage.content,
       DEFAULT_CHAT_MODEL,
       sessionId.value,
+      userId.value,
       tw.push
     )
     await tw.flushRest()

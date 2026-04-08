@@ -1,0 +1,49 @@
+---
+description: 命名、常量、布尔开关与注释风格的项目约定
+alwaysApply: true
+---
+
+# 代码修改约定
+
+## 1. 命名：禁止以下划线开头
+
+全局名、方法名、变量名均不得使用 `_` 前缀（例如不要用 `_foo`、`_internal`）。
+
+```python
+# ❌ BAD
+def _helper():
+    _x = 1
+
+# ✅ GOOD
+def helper():
+    x = 1
+```
+
+## 2. 常量：直接赋值
+
+定义常量时不要使用 `os.getenv` 读取，在代码中直接赋字面量。
+
+```python
+# ❌ BAD
+import os
+API_BASE = os.getenv("API_BASE", "http://localhost")
+
+# ✅ GOOD
+API_BASE = "http://localhost"
+```
+
+## 3. 布尔开关：直接布尔值
+
+不要通过环境变量字符串再解析成布尔，直接写 `True` / `False`。
+
+```python
+# ❌ BAD
+DEBUG = os.getenv("DEBUG", "").lower() in ("1", "true", "yes")
+
+# ✅ GOOD
+DEBUG = False
+```
+
+## 4. 注释：新增与修改时多写注释
+
+在**新增或修改**代码时，主动补充注释：说明意图、关键步骤、非显而易见的约束或边界情况；复杂分支、复杂代码或魔法数字旁应有简短说明。避免无信息量的废话注释，也避免大块代码零注释。

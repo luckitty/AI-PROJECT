@@ -42,12 +42,13 @@ apiClient.interceptors.response.use(
  * 发送聊天消息（非流式，POST /api/chat，一次返回完整 reply）。
  * 页面上的「三个点」加载态由 ChatInterface.vue 在 await 本函数前后控制 isTyping。
  */
-export const sendChatMessage = async (message, model = 'deepseek-chat', sessionId) => {
+export const sendChatMessage = async (message, model = 'deepseek-chat', sessionId, userId) => {
   try {
     const response = await apiClient.post('/api/chat', {
       message,
       model,
-      session_id: sessionId
+      session_id: sessionId,
+      user_id: userId || undefined
     })
     return response.reply || response.content || response.message || '未收到有效回复'
   } catch (error) {
@@ -89,6 +90,7 @@ export const sendChatMessageStream = async (
   message,
   model = 'deepseek-chat',
   sessionId,
+  userId,
   onChunk,
 ) => {
   try {
@@ -100,7 +102,8 @@ export const sendChatMessageStream = async (
       body: JSON.stringify({
         message,
         model,
-        session_id: sessionId || undefined
+        session_id: sessionId || undefined,
+        user_id: userId || undefined
       })
     })
 

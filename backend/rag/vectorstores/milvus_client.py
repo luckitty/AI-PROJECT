@@ -3,7 +3,7 @@ from langchain_milvus import Milvus
 
 import backend.rag.vectorstores.milvus_langchain_compat  # noqa: F401
 
-def _milvus_connection_args():
+def milvus_connection_args():
     host = os.getenv("MILVUS_HOST", "127.0.0.1")
     port = os.getenv("MILVUS_PORT", "19530")
     timeout = float(os.getenv("MILVUS_TIMEOUT", "60"))
@@ -15,8 +15,13 @@ def _milvus_connection_args():
         "grpc_options": {"grpc.enable_http_proxy": 0},
     }
 
+
+def get_milvus_connection_args():
+    """与 RAG 相同的 Milvus 连接参数，供长期记忆等模块复用。"""
+    return milvus_connection_args()
+
 def get_vectorstore_milvus(docs, embedding):
-    conn = _milvus_connection_args()
+    conn = milvus_connection_args()
     collection_name = os.getenv("MILVUS_COLLECTION", "rag_collection")
     skip_ingest = os.getenv("MILVUS_SKIP_INGEST", "").lower() in ("1", "true", "yes")
     drop_old = os.getenv("MILVUS_DROP_OLD", "").lower() in ("1", "true", "yes")

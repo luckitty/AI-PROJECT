@@ -1,0 +1,4 @@
+# 主要依赖见各环境；以下为 LangGraph Redis 检查点所需
+langgraph-checkpoint-redis>=0.4.0
+# RedisChatMessageHistory（memory/redis_history 中 Runnable 链可选）
+langchain-community>=0.3.0
