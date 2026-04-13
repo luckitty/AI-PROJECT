@@ -4,8 +4,8 @@
     <div class="sidebar" :class="{ 'collapsed': sidebarCollapsed }">
       <div class="sidebar-header">
         <div class="logo">
-          <span class="logo-icon">🤖</span>
-          <span class="logo-text" v-show="!sidebarCollapsed">AI Chat</span>
+          <span class="logo-icon"></span>
+          <span class="logo-text" v-show="!sidebarCollapsed">个性化推荐系统</span>
         </div>
         <button
           type="button"
@@ -74,7 +74,7 @@
       <!-- 消息列表 -->
       <div class="messages-container" ref="messagesContainer">
         <div v-if="messages.length === 0" class="welcome-message">
-          <h1>你好，我是 AI 助手</h1>
+          <h1>你好，我是个性化推荐系统</h1>
           <p>有什么可以帮你的吗？</p>
         </div>
 

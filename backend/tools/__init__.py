@@ -3,7 +3,7 @@
 """
 from tools.weather_tool import get_weather
 from tools.stock_tool import get_stock_price
-from tools.search_txt_tool import search_local_knowledge
+from tools.search_web_tool import web_search
 
 # 工具集合
-ALL_TOOLS = [get_weather, get_stock_price, search_local_knowledge]
+ALL_TOOLS = [get_weather, get_stock_price, web_search]

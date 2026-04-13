@@ -9,7 +9,7 @@ print("MODEL_NAME=========",MODEL_NAME)
 
 def get_llm(
     model: str = MODEL_NAME,
-    temperature: float = 0.7,
+    temperature: float = 0,
     max_tokens: int = 2000,
     streaming: bool = True
 ) -> ChatOpenAI:

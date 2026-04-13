@@ -27,7 +27,7 @@ ai-project/
 │   ├── chains/chat_chain.py    # RunnableWithMessageHistory（历史清理等）
 │   ├── core/config.py          # 环境变量
 │   ├── core/llm.py             # ChatOpenAI（DeepSeek）
-│   ├── tools/                  # 天气、股票、search_txt_tool（RAG）
+│   ├── tools/                  # 天气、股票、search_local_tool（RAG）
 │   ├── rag/                    # 嵌入、加载、混合检索、Chroma、重排
 │   ├── memory/                 # 预留 / Redis 等扩展
 │   └── data/                   # RAG 原始 txt（可增删后按需重建向量库）

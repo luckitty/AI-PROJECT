@@ -11,7 +11,7 @@ from langchain_core.documents import Document
 from langchain_milvus import Milvus
 
 import rag.vectorstores.milvus_langchain_compat  # noqa: F401
-from rag.embeddings.hf_embedding import get_embeddings
+from rag.embedding import get_embeddings
 from rag.vectorstores.milvus_client import get_milvus_connection_args
 
 # 与 RAG 默认 collection 区分开，长期记忆单独存一份
