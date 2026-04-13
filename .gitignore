@@ -63,6 +63,9 @@ faiss_index/
 *.log
 logs/
 
+# 规则
+.cursor/rules/
+
 # 操作系统
 .DS_Store
 Thumbs.db
