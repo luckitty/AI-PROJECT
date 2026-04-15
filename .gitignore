@@ -60,6 +60,7 @@ faiss_index/
 
 # 文件夹
 backend/crawler/
+backend/data/note_images/
 
 
 
