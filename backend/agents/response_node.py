@@ -1,5 +1,6 @@
 from core.llm import get_llm
 import re
+import time
 
 
 def should_enforce_travel_format(tool_text: str) -> bool:
@@ -28,31 +29,6 @@ def has_tool_unavailable_excuse(answer_text: str) -> bool:
     return re.search(pattern, text) is not None
 
 
-def rewrite_travel_answer(query: str, tool_text: str, draft_answer: str) -> str:
-    """当旅游回答不合规时，基于工具材料进行一次强制结构化重写。"""
-    rewrite_prompt = f"""
-你是旅游行程编排助手。请严格按工具给出的“行程输出要求（必须遵守）”重写答案。
-
-用户问题：
-{query}
-
-工具结果（含格式约束）：
-{tool_text}
-
-当前草稿（不合规，不能直接输出）：
-{draft_answer}
-
-重写规则：
-1) 必须按“第X天路线”输出完整日程，不能写成泛泛介绍。
-2) 每天必须包含：早餐、上午安排、午餐策略、下午安排、晚餐、出片点、时间合理性说明。
-3) 如果用户没给天数，先给建议天数和理由，再展开每天路线。
-4) 直接输出最终可执行版本，不要解释改写过程。
-"""
-    llm = get_llm(streaming=True)
-    msg = llm.invoke(rewrite_prompt)
-    return msg.content if hasattr(msg, "content") else str(msg)
-
-
 def response_node(state):
     query = state["query"]
     system_prompt = state.get("system_prompt") or ""
@@ -61,6 +37,7 @@ def response_node(state):
     memory = state.get("memory_context") or ""
     rag = state.get("rag_context") or ""
     tool = state.get("tool_result") or ""
+    print("response_node===========tool \n", tool, "\n")
 
     prompt = f"""
         系统指令（必须优先遵守）：
@@ -88,15 +65,18 @@ def response_node(state):
         请给出清晰、有用的回答：
         """
 
-    llm = get_llm(streaming=True)
+    # 当前节点最终只需要完整答案，不消费 token 流，改为非流式可降低不必要开销。
+    llm = get_llm(streaming=False)
+    invoke_start_at = time.perf_counter()
     msg = llm.invoke(prompt)
+    invoke_cost_seconds = time.perf_counter() - invoke_start_at
     answer = msg.content if hasattr(msg, "content") else str(msg)
-    print("response_node===========answer \n", answer, "\n")
-    # 旅游攻略场景做一次结构化兜底，确保输出不会退化为普通介绍文案。
-    # if should_enforce_travel_format(tool) and (
-    #     (not is_travel_answer_compliant(answer)) or has_tool_unavailable_excuse(answer)
-    # ):
-    #     answer = rewrite_travel_answer(query, tool, answer)
+    print(
+        f"response_node===========llm_invoke耗时: {invoke_cost_seconds:.2f}s, "
+        f"answer长度: {len(answer)}"
+    )
+    print("response_node===========answer_preview \n", answer, "\n")
+  
     return {
         **state,
         "final_answer": answer

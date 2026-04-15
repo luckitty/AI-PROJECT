@@ -337,19 +337,13 @@ def extract_spots(text: str, title: str) -> list[str]:
 
 def extract_foods(text: str) -> list[str]:
     """从融合文本中抽取美食与餐饮关键词。"""
-    foods = []
-    for keyword in FOOD_KEYWORDS:
-        if keyword in text:
-            foods.append(keyword)
+    foods = [keyword for keyword in FOOD_KEYWORDS if keyword in text]
     return unique_keep_order(foods)[:12]
 
 
 def extract_transport(text: str) -> list[str]:
     """从融合文本中抽取交通方式关键词。"""
-    transports = []
-    for keyword in TRANSPORT_KEYWORDS:
-        if keyword in text:
-            transports.append(keyword)
+    transports = [keyword for keyword in TRANSPORT_KEYWORDS if keyword in text]
     return unique_keep_order(transports)[:12]
 
 
@@ -422,7 +416,8 @@ def load_travel_cache_docs(data_path="data", city_name=None, allow_runtime_ocr=F
     - False：只复用已有 OCR 缓存，不做实时识别（默认，保证查询低时延）
     - True：缓存缺失时允许识别图片并回写缓存（适合离线预处理）
     """
-    cache_dir = Path(data_path) / "cache"
+    data_root = Path(data_path)
+    cache_dir = data_root / "cache"
     if not cache_dir.is_dir():
         return []
 
@@ -461,12 +456,12 @@ def load_travel_cache_docs(data_path="data", city_name=None, allow_runtime_ocr=F
             if has_images and not prev_has_images:
                 merged[note_id] = item
 
-    ocr_cache_path = Path(data_path) / "cache_ocr_text.json"
+    ocr_cache_path = data_root / "cache_ocr_text.json"
     ocr_cache = load_ocr_cache(ocr_cache_path)
     cache_updated = False
 
     docs = []
-    backend_root = Path(data_path).resolve().parent
+    backend_root = data_root.resolve().parent
     for note in merged.values():
         title = normalize_text(note.get("title"))
         desc = normalize_text(note.get("desc"))
@@ -496,7 +491,6 @@ def load_travel_cache_docs(data_path="data", city_name=None, allow_runtime_ocr=F
             f"预算:{structured_profile['budget_level']}\n"
             f"时长:{structured_profile['duration']}"
         ).strip()
-        print("profile_text_for_embed===========结果不准确 \n", profile_text_for_embed, "\n")
         page_content = f"{title}\n{desc}\n{ocr_text_for_embed}\n{profile_text_for_embed}".strip()
         docs.append(
             Document(
@@ -536,11 +530,9 @@ def load_ocr_cache(cache_file: Path):
     try:
         with open(cache_file, "r", encoding="utf-8") as file:
             data = json.load(file)
-        if isinstance(data, dict):
-            return data
+        return data if isinstance(data, dict) else {}
     except (OSError, json.JSONDecodeError):
         return {}
-    return {}
 
 
 def save_ocr_cache(cache_file: Path, cache_data: dict):
@@ -549,7 +541,7 @@ def save_ocr_cache(cache_file: Path, cache_data: dict):
         with open(cache_file, "w", encoding="utf-8") as file:
             json.dump(cache_data, file, ensure_ascii=False)
     except OSError:
-        return
+        pass
 
 
 def resolve_local_image_paths(note: dict, backend_root: Path):
@@ -658,9 +650,7 @@ def get_or_build_note_ocr_text(
         if cached_ocr:
             return cached_ocr, False
         # 已确认「确实无字」的笔记不再反复识别，防止建库阶段被空串拖死。
-        if cached_item.get("empty_verified"):
-            return "", False
-        if not allow_runtime_ocr:
+        if cached_item.get("empty_verified") or not allow_runtime_ocr:
             return "", False
 
     # 在线查询默认不补跑 OCR：缺缓存就直接空串返回，避免单次检索触发上百张图识别。

@@ -8,5 +8,5 @@ langchain-experimental>=0.3.0
 playwright>=1.52.0
 # 下载笔记配图
 requests>=2.31.0
-# 旅游攻略配图 OCR（search_trivel_tool）
+# 旅游攻略配图 OCR（search_travel_tool）
 rapidocr-onnxruntime>=1.3.0

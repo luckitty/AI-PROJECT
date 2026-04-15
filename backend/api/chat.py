@@ -7,14 +7,12 @@ from pydantic import BaseModel
 from typing import Any, Optional
 from langchain_core.messages import AIMessage
 import json
-import re
 # 使用相对导入
 from agents.assistant import (
     DEFAULT_SYSTEM_PROMPT,
     create_assistant,
     clear_agent_session,
 )
-from crawler.runner import run_travel_route_agent
 from chains.chat_chain import clear_session_history
 
 from memory.long_memory_guard import (
@@ -138,91 +136,11 @@ class ChatResponse(BaseModel):
     reply: str
     session_id: Optional[str] = None
     user_id: Optional[str] = None
-    route_plan: Optional[dict] = None
 
 
 class HistoryRequest(BaseModel):
     """历史请求"""
     session_id: str
-
-
-class TravelPlanRequest(BaseModel):
-    """旅游路线请求：仅传小红书搜索用的关键词，由用户自由描述。"""
-    keyword: str
-
-
-def parse_destination_and_days(message: str) -> tuple[str, int]:
-    """从输入文本中提取目的地和天数，形如“杭州三日游攻略”"""
-    normalized_message = (message or "").strip()
-    if not normalized_message:
-        raise ValueError("请输入旅游请求，例如：杭州三日游攻略")
-
-    # 目的地优先提取“xx三日游”前面的中文地名。
-    destination_match = re.search(r"([\u4e00-\u9fa5]{2,12})(?:\s*)([一二三四五六七八九十\d]+)日游", normalized_message)
-    if destination_match:
-        destination = destination_match.group(1)
-        day_token = destination_match.group(2)
-    else:
-        raise ValueError("未识别到目的地和天数，请使用“杭州三日游攻略”格式输入")
-
-    day_map = {
-        "一": 1,
-        "二": 2,
-        "三": 3,
-        "四": 4,
-        "五": 5,
-        "六": 6,
-        "七": 7,
-        "八": 8,
-        "九": 9,
-        "十": 10,
-    }
-    if day_token.isdigit():
-        days = int(day_token)
-    else:
-        if day_token not in day_map:
-            raise ValueError("未识别到有效天数，请使用“X日游”格式")
-        days = day_map[day_token]
-    days = max(1, min(days, 10))
-    return destination, days
-
-
-def derive_route_meta_from_keyword(keyword: str) -> tuple[str, int]:
-    """从用户关键词中解析路线展示用的目的地与天数；无「X日游」时取首段中文地名并默认 3 天。"""
-    text = (keyword or "").strip()
-    if not text:
-        return "旅行", 3
-    try:
-        return parse_destination_and_days(text)
-    except ValueError:
-        match = re.search(r"([\u4e00-\u9fa5]{2,12})", text)
-        destination = match.group(1) if match else "旅行"
-        return destination, 3
-
-
-def format_route_plan_as_markdown(route_plan: dict) -> str:
-    """把结构化路线结果转成前端可展示 Markdown。"""
-    destination = route_plan.get("destination", "")
-    days = route_plan.get("days", 0)
-    top_spots = route_plan.get("top_spots", [])
-    lines = [f"# {destination}{days}日游路线建议", ""]
-
-    if top_spots:
-        lines.append("## 高频景点参考")
-        lines.append("、".join(top_spots[:10]))
-        lines.append("")
-
-    lines.append("## 每日行程")
-    for day_item in route_plan.get("route", []):
-        day_number = day_item.get("day", "")
-        spots = day_item.get("spots", [])
-        notes = day_item.get("notes", "")
-        lines.append(f"### Day {day_number}")
-        lines.append(f"- 推荐路线：{' -> '.join(spots) if spots else '待补充'}")
-        if notes:
-            lines.append(f"- 备注：{notes}")
-        lines.append("")
-    return "\n".join(lines).strip()
 
 
 # ============ API 端点 ============
@@ -307,39 +225,6 @@ async def chat_stream(request: ChatRequest):
             "X-Accel-Buffering": "no",
         },
     )
-
-
-@router.post("/travel-plan", response_model=ChatResponse)
-def travel_plan(request: TravelPlanRequest):
-    """旅游路线生成：仅根据 keyword 抓取笔记并生成路线（keyword 即小红书搜索词）。"""
-    try:
-        keyword = (request.keyword or "").strip()
-        if not keyword:
-            raise HTTPException(status_code=400, detail="keyword 不能为空")
-        destination, days = derive_route_meta_from_keyword(keyword)
-        route_plan = run_travel_route_agent(
-            keyword=keyword,
-            destination=destination,
-            days=days,
-            headless=True,
-            # 多滚几屏以便凑够约 50 条笔记卡片。
-            max_scroll_rounds=14,
-            max_note_count=50,
-            # 强制实时抓取，避免命中旧缓存导致详情字段为空。
-            use_cache=False,
-            force_refresh=True,
-            # 页面抓取优先复用本机已登录 Chrome，降低空结果概率。
-            use_cdp=True,
-            cdp_url="http://127.0.0.1:9222",
-            # 明确使用页面抓取详情，不走 HTTP 接口降级链路。
-            use_http_api=False,
-        )
-        print("travel_plan===========route_plan \n", route_plan, "\n")
-        markdown_reply = format_route_plan_as_markdown(route_plan)
-        return ChatResponse(reply=markdown_reply, session_id=None, user_id=None, route_plan=route_plan)
-    except Exception as error:
-        raise HTTPException(status_code=500, detail=f"旅游路线生成失败: {error}")
-
 
 @router.delete("/history/{session_id}")
 async def clear_history(session_id: str):

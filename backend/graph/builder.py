@@ -44,5 +44,4 @@ def build_graph():
     graph.add_edge("response", "save_memory")
     graph.add_edge("save_memory", END)
 
-    # 图编排同样接入短期记忆检查点，确保与 create_assistant 的会话持久化行为一致。
     return graph.compile(checkpointer=get_short_term_checkpointer())

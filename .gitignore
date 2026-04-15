@@ -58,6 +58,10 @@ volumes/
 # 向量索引
 faiss_index/
 
+# 文件夹
+backend/crawler/
+
+
 
 # 日志
 *.log

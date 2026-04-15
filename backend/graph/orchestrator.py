@@ -31,7 +31,6 @@ class AgentOrchestrator:
         session_id: str = "",
         system_prompt: str = "",
     ):
-        # 统一的图编排流式入口：让 API 层不再直接依赖 create_assistant 的流式实现。
         # stream_mode="messages" 会把图中 LLM 节点产生的消息增量往外透传。
         return self.graph.stream(
             build_initial_state(query, user_id, session_id, system_prompt),

@@ -17,7 +17,7 @@ NOTE_IMAGES_ROOT = BACKEND_ROOT / "data" / "note_images"
 
 TOP_K_NOTES = 4
 # 美食类问题需要覆盖同城多条笔记；具体上限仍受 retrieve_travel_docs 与数据量约束。
-TOP_K_FOOD = 20
+TOP_K_FOOD = 10
 MAX_IMAGES_PER_NOTE = 8
 
 # 查询阶段不对配图做实时 OCR：否则「美食检索约 20 条 × 每条约 8 张图」会触发上百次 RapidOCR，单次搜索可达数分钟。
@@ -301,7 +301,7 @@ def build_itinerary_format_instruction(query: str) -> str:
 
 
 @tool
-def search_trivel(query: str) -> str:
+def search_travel(query: str) -> str:
     """旅游行程专用工具：从本地 data/cache 语义检索笔记并返回“强约束格式指令”。当用户问旅游攻略/行程路线/景点美食时必须优先调用本工具，并严格按工具返回的“行程输出要求（必须遵守）”组织答案，不得改写为泛泛介绍。"""
     q = (query or "").strip()
     if not q:
@@ -309,13 +309,12 @@ def search_trivel(query: str) -> str:
 
     top_k = TOP_K_FOOD if is_food_focus_query(q) else TOP_K_NOTES
     docs = retrieve_travel_docs(q, top_k=top_k)
-    print("search_trivel 命中文档数:", len(docs))
+    print("search_travel 命中文档数:", len(docs))
     if not docs:
         return "本地暂无缓存笔记（data/cache 为空或无法读取），请先通过其它方式导入缓存数据。"
 
     # days = parse_travel_days(q)
     format_instruction = build_itinerary_format_instruction(q)
-    print("format_instruction===========format_instruction \n", format_instruction, "\n")
     compact_summary = build_compact_material_summary(docs, q)
     print("compact_summary===========compact_summary \n", compact_summary, "\n")
     blocks = []
@@ -351,7 +350,7 @@ def search_trivel(query: str) -> str:
         "- 优先使用下面的参考材料事实，不够再做合理补充，但不要偏离用户问题。\n\n"
         "- 语言可以稍微幽默风趣一点，不要过于正式\n"
         "- 回答的时候需要多用表情包或者图标来增加趣味性 比如地点可以用📍 火锅可以用🍲 景点可以用🎈 交通可以用🚗 住宿可以用🏠 等等\n"
-        "- 回答格式可以多元化，不要过于单一，文字可以加点颜色\n"
+        "- 回答格式可以多元化，不要过于单一，例如可以加表格展示\n"
         + "【素材紧凑摘要（优先使用）】但不要出现“素材”、“参考材料”等字眼\n"
         + compact_summary
         + "\n\n".join(blocks)

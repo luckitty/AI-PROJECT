@@ -69,21 +69,6 @@
             <option value="plain">一次性</option>
           </select>
         </div>
-        <!-- <div class="travel-form">
-          <input
-            v-model.trim="travelKeyword"
-            class="travel-input travel-keyword"
-            placeholder="输入搜索关键词，如：西安 3天 美食攻略"
-          />
-          <button
-            type="button"
-            class="travel-generate-btn"
-            @click="generateTravelPlanFromForm"
-            :disabled="isTyping || !travelKeyword"
-          >
-            生成路线
-          </button>
-        </div> -->
       </div>
 
       <!-- 消息列表 -->
@@ -101,19 +86,6 @@
               class="message-text message-text-streaming"
             >
               <span class="stream-plain">{{ message.content }}</span><span class="stream-cursor">▍</span>
-            </div>
-            <div v-else-if="message.role === 'assistant' && message.routePlan" class="route-plan-card">
-              <div class="route-plan-header">
-                <h3>{{ message.routePlan.destination }}{{ message.routePlan.days }}日游路线</h3>
-                <p v-if="message.routePlan.top_spots?.length">热门：{{ message.routePlan.top_spots.slice(0, 8).join('、') }}</p>
-              </div>
-              <div class="route-day-list">
-                <div v-for="dayPlan in message.routePlan.route || []" :key="dayPlan.day" class="route-day-item">
-                  <div class="route-day-title">Day {{ dayPlan.day }}</div>
-                  <div class="route-day-spots">{{ (dayPlan.spots || []).join(' -> ') }}</div>
-                  <div class="route-day-notes">{{ dayPlan.notes }}</div>
-                </div>
-              </div>
             </div>
             <div v-else class="message-text" v-html="renderMessage(message.content || '')"></div>
           </div>
@@ -164,7 +136,7 @@
 import { ref, nextTick, onMounted } from 'vue'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
-import { generateTravelPlan, sendChatMessage, sendChatMessageStream } from '@/api/chat'
+import { sendChatMessage, sendChatMessageStream } from '@/api/chat'
 
 // 响应式数据
 const messages = ref([])
@@ -176,8 +148,6 @@ const DEFAULT_CHAT_MODEL = 'deepseek-chat'
 const replyMode = ref('stream')
 const messagesContainer = ref(null)
 const inputRef = ref(null)
-/** 旅游路线：仅一个关键词，传给后端 /travel-plan 的 keyword */
-const travelKeyword = ref('')
 
 // 聊天历史
 const chatHistory = ref([])
@@ -267,39 +237,6 @@ function pushErrorAssistant(msg) {
 function formatSendError(e) {
   return '抱歉，发生错误：' + (e.message || '未知错误')
 }
-
-// function isTravelPlanQuery(content) {
-//   const text = String(content || '').trim()
-//   // 识别“杭州三日游攻略/上海2日游”一类请求，命中后走专用路线接口。
-//   return /[\u4e00-\u9fa5]{2,12}\s*[一二三四五六七八九十\d]+日游/.test(text) || text.includes('游攻略')
-// }
-
-// async function generateTravelPlanFromForm() {
-//   if (isTyping.value || !travelKeyword.value) return
-//   const prompt = travelKeyword.value.trim()
-//   messages.value.push({
-//     role: 'user',
-//     content: prompt,
-//     timestamp: Date.now()
-//   })
-//   isTyping.value = true
-//   await scrollToBottom()
-//   try {
-//     const result = await generateTravelPlan(prompt)
-//     messages.value.push({
-//       role: 'assistant',
-//       content: result.reply,
-//       routePlan: result.routePlan,
-//       timestamp: Date.now()
-//     })
-//   } catch (error) {
-//     pushErrorAssistant(formatSendError(error))
-//   } finally {
-//     isTyping.value = false
-//     await scrollToBottom()
-//     saveChatHistory()
-//   }
-// }
 
 /**
  * 流式回复的「打字机」：SSE 可能一次推一大段，先放进 pending，再按帧写入气泡。
@@ -406,17 +343,16 @@ const sendMessagePlain = async () => {
   const userMessage = await startUserTurn()
   if (!userMessage) return
   try {
-    const travelResult = isTravelPlanQuery(userMessage.content)
-      ? await generateTravelPlan(userMessage.content.trim())
-      : null
-    const reply = travelResult
-      ? travelResult.reply
-      : await sendChatMessage(userMessage.content, DEFAULT_CHAT_MODEL, sessionId.value, userId.value)
+    const reply = await sendChatMessage(
+      userMessage.content,
+      DEFAULT_CHAT_MODEL,
+      sessionId.value,
+      userId.value
+    )
     isTyping.value = false
     messages.value.push({
       role: 'assistant',
       content: reply,
-      routePlan: travelResult ? travelResult.routePlan : null,
       timestamp: Date.now()
     })
   } catch (e) {
@@ -433,25 +369,6 @@ const sendMessageStream = async () => {
   console.log("sendMessageStream===========流式发送消息 \n", userId.value, "\n\n")
   const userMessage = await startUserTurn()
   if (!userMessage) return
-  // if (isTravelPlanQuery(userMessage.content)) {
-  //   try {
-  //     const result = await generateTravelPlan(userMessage.content.trim())
-  //     isTyping.value = false
-  //     messages.value.push({
-  //       role: 'assistant',
-  //       content: result.reply,
-  //       routePlan: result.routePlan,
-  //       timestamp: Date.now()
-  //     })
-  //   } catch (e) {
-  //     console.error(e)
-  //     isTyping.value = false
-  //     pushErrorAssistant(formatSendError(e))
-  //   } finally {
-  //     await endUserTurn()
-  //   }
-  //   return
-  // }
   const tw = createStreamTypewriter()
   try {
     const full = await sendChatMessageStream(

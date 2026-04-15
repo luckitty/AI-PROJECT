@@ -57,26 +57,6 @@ export const sendChatMessage = async (message, model = 'deepseek-chat', sessionI
 }
 
 /**
- * 旅游路线专用接口：仅传 keyword（小红书搜索词），返回路线 Markdown。
- */
-export const generateTravelPlan = async (keyword) => {
-  try {
-    const response = await apiClient.post('/api/chat/travel-plan', {
-      keyword
-    }, {
-      // 旅游规划：约 50 条笔记 + 每条间隔约 2～4s（随机）+ 路线生成，需更长超时。
-      timeout: 600000
-    })
-    return {
-      reply: response.reply || response.content || '未生成路线结果',
-      routePlan: response.route_plan || null
-    }
-  } catch (error) {
-    throw error
-  }
-}
-
-/**
  * 把 SSE 里「data:」后面那一截字符串解析成要给用户看的正文。
  *
  * 后端约定两种形式：

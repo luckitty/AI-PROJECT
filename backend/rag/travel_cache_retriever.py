@@ -26,6 +26,14 @@ INTENT_FIELD_KEYWORDS = {
     "tags_text": ["拍照", "出片", "打卡", "机位", "景点"],
     "transport_text": ["交通", "地铁", "公交", "怎么去", "打车", "路线"],
 }
+INTENT_KEYWORD_TO_FIELDS = {}
+for field_name, keywords in INTENT_FIELD_KEYWORDS.items():
+    for keyword in keywords:
+        INTENT_KEYWORD_TO_FIELDS.setdefault(keyword, []).append(field_name)
+
+# 城市路由缓存：避免每次请求都重新 glob cache 目录。
+cached_city_file_signature = tuple()
+cached_city_names = []
 
 # 用户问题命中这些片段时视为「美食向」查询：需要多召回 + 与城市内美食笔记合并。
 FOOD_FOCUS_KEYWORDS = (
@@ -86,10 +94,19 @@ def metadata_suggests_food(metadata: dict) -> bool:
 
 
 def list_available_cities() -> List[str]:
-    """列出 cache 目录里可路由的城市名（文件名去掉 .json）。"""
+    """列出 cache 目录里可路由的城市名（文件名去掉 .json），并复用进程内缓存。"""
     if not CACHE_DIR.is_dir():
         return []
-    return [p.stem for p in sorted(CACHE_DIR.glob("*.json"))]
+    global cached_city_file_signature, cached_city_names
+    city_files = sorted(CACHE_DIR.glob("*.json"))
+    current_signature = tuple((p.name, p.stat().st_mtime, p.stat().st_size) for p in city_files)
+    if current_signature == cached_city_file_signature and cached_city_names:
+        return cached_city_names
+    # 命中多个城市时按长度优先匹配，因此这里提前按长度降序缓存，后续 detect 可直接复用。
+    cities = [p.stem for p in city_files]
+    cached_city_names = sorted(cities, key=len, reverse=True)
+    cached_city_file_signature = current_signature
+    return cached_city_names
 
 
 def detect_city_from_query(query: str) -> Optional[str]:
@@ -98,7 +115,7 @@ def detect_city_from_query(query: str) -> Optional[str]:
     if not q:
         return None
     cities = list_available_cities()
-    for city in sorted(cities, key=len, reverse=True):
+    for city in cities:
         if city and city in q:
             return city
     return None
@@ -188,15 +205,21 @@ def drop_travel_collection_if_exists(collection_name: str) -> None:
     """
     conn = milvus_connection_args()
     alias = "travel_cache_sync"
-    connections.connect(
-        alias=alias,
-        host=conn["host"],
-        port=conn["port"],
-        timeout=conn["timeout"],
-        grpc_options=conn.get("grpc_options"),
-    )
-    if utility.has_collection(collection_name, using=alias):
-        utility.drop_collection(collection_name, using=alias)
+    try:
+        connections.connect(
+            alias=alias,
+            host=conn["host"],
+            port=conn["port"],
+            timeout=conn["timeout"],
+            grpc_options=conn.get("grpc_options"),
+        )
+        if utility.has_collection(collection_name, using=alias):
+            utility.drop_collection(collection_name, using=alias)
+    finally:
+        try:
+            connections.disconnect(alias)
+        except Exception:
+            pass
 
 
 def cache_signature_for_city(city_name: Optional[str]) -> Tuple:
@@ -226,7 +249,8 @@ def ensure_travel_vectorstore_by_city(city_name: Optional[str]):
     cached_signature = cached_signatures.get(cache_key)
     cached_docs = cached_docs_by_key.get(cache_key)
     cached_vectorstore = cached_vectorstores.get(cache_key)
-    if cached_vectorstore is not None and cached_docs is not None and cached_signature == current_signature:
+    # 签名一致时直接复用缓存（即使向量库为 None，也能避免每次都重复扫盘加载空数据）。
+    if cached_docs is not None and cached_signature == current_signature:
         return cached_docs, cached_vectorstore
 
     docs = get_docs(str(BACKEND_ROOT / "data"), source_type="travel_cache", city_name=city_name)
@@ -252,7 +276,7 @@ def ensure_travel_vectorstore_by_city(city_name: Optional[str]):
             cached_vectorstores[cache_key] = vectorstore
             return cached_docs_by_key[cache_key], cached_vectorstores[cache_key]
         except Exception:
-            # 复用失败（版本/字段不一致等）时回退到下方全量重建，避免 search_trivel 整条链路抛错无响应。
+            # 复用失败（版本/字段不一致等）时回退到下方全量重建，避免 search_travel 整条链路抛错无响应。
             pass
 
     # 旅游域使用独立 Milvus collection，避免覆盖主知识库 collection。
@@ -337,25 +361,42 @@ def retrieve_travel_docs(query: str, top_k: int = 4) -> List:
                 seen.add(key)
             candidates.append(doc)
 
-    return rerank_docs_by_structured_profile(candidates, query, effective_top_k)
+    return rerank_docs_by_structured_profile(
+        candidates,
+        query,
+        effective_top_k,
+        city_name=city_name,
+        food_focus=food_focus,
+    )
 
 
 def infer_query_intent_fields(query: str) -> list[str]:
     """根据用户问题推断应优先匹配的结构化字段。"""
     intent_fields = []
-    for field_name, keywords in INTENT_FIELD_KEYWORDS.items():
-        for keyword in keywords:
-            if keyword in query:
-                intent_fields.append(field_name)
-                break
+    seen_fields = set()
+    for keyword, fields in INTENT_KEYWORD_TO_FIELDS.items():
+        if keyword not in query:
+            continue
+        for field_name in fields:
+            if field_name in seen_fields:
+                continue
+            seen_fields.add(field_name)
+            intent_fields.append(field_name)
     return intent_fields
 
 
-def rerank_docs_by_structured_profile(candidates: list, query: str, top_k: int) -> list:
+def rerank_docs_by_structured_profile(
+    candidates: list,
+    query: str,
+    top_k: int,
+    city_name: Optional[str] = None,
+    food_focus: Optional[bool] = None,
+) -> list:
     """结合城市与意图字段进行轻量重排，提升垂类问题命中率。"""
-    city_name = detect_city_from_query(query) or ""
+    # 调用方已算出城市/美食意图时直接复用，避免重复做城市文件扫描和关键词判定。
+    city_name = city_name if city_name is not None else (detect_city_from_query(query) or "")
     intent_fields = infer_query_intent_fields(query)
-    food_focus = is_food_focus_query(query)
+    food_focus = food_focus if food_focus is not None else is_food_focus_query(query)
     scored_items = []
     for rank, doc in enumerate(candidates):
         metadata = doc.metadata or {}
