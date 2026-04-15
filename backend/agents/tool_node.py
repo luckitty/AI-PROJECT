@@ -6,6 +6,7 @@ def tool_node(state):
     query = state["query"]
 
     result = tool_executor.run(query)
+    print("tool_node===========result \n", result, "\n")
 
     return {
         **state,

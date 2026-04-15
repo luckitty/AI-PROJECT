@@ -20,6 +20,8 @@ class AgentOrchestrator:
             config={"configurable": {"thread_id": session_id}},
         )
 
+        print("result===========result \n", result, "\n")
+
         return result.get("final_answer", "")
 
     def stream(
