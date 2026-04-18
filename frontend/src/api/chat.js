@@ -176,4 +176,21 @@ export const clearChatHistory = async (sessionId) => {
   }
 }
 
+/**
+ * 根据已生成的行程文本请求后端生成每日路线图。
+ * 返回形如：[{ day, image_url, places }]
+ */
+export const buildRouteImages = async (query, itineraryText) => {
+  try {
+    const response = await apiClient.post('/api/chat/route-images', {
+      query,
+      itinerary_text: itineraryText
+    })
+    return response.items || []
+  } catch (error) {
+    console.error('路线图生成失败:', error)
+    return []
+  }
+}
+
 export default apiClient

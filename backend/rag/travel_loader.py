@@ -640,6 +640,10 @@ def get_or_build_note_ocr_text(
     note_id = normalize_text(note.get("note_id"))
     if not note_id:
         return "", False
+    # 若城市 JSON 已离线写入 ocr_text（预构建脚本合并），直接复用，避免再走图片签名与 OCR 缓存分支。
+    prebuilt = normalize_text(note.get("ocr_text"))
+    if prebuilt:
+        return prebuilt, False
     image_paths = resolve_local_image_paths(note, backend_root)
     if not image_paths:
         return "", False

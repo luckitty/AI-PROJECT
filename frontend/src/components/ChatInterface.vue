@@ -136,7 +136,7 @@
 import { ref, nextTick, onMounted } from 'vue'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
-import { sendChatMessage, sendChatMessageStream } from '@/api/chat'
+import { sendChatMessage, sendChatMessageStream, buildRouteImages } from '@/api/chat'
 
 // 响应式数据
 const messages = ref([])
@@ -236,6 +236,35 @@ function pushErrorAssistant(msg) {
 
 function formatSendError(e) {
   return '抱歉，发生错误：' + (e.message || '未知错误')
+}
+
+function formatRouteImagesMarkdown(routeItems) {
+  const items = Array.isArray(routeItems) ? routeItems : []
+  if (!items.length) return ''
+  const blocks = ['\n\n---\n\n## 🗺 每日路线图\n']
+  for (const item of items) {
+    const day = item?.day || '当日路线'
+    const imageUrl = item?.image_url || ''
+    const places = item?.places || ''
+    if (!imageUrl) continue
+    blocks.push(`### ${day}`)
+    if (places) {
+      blocks.push(`- 途经点位：${places}`)
+    }
+    blocks.push(`![${day}路线图](${imageUrl})`)
+    blocks.push('')
+  }
+  return blocks.join('\n').trim()
+}
+
+async function appendRouteImagesToAssistant(userQuery, assistantText) {
+  const query = String(userQuery || '').trim()
+  const itineraryText = String(assistantText || '').trim()
+  // 仅在“旅游/攻略/行程”类问题尝试生成路线图，避免无关对话触发额外请求。
+  const shouldGenerate = /(旅游|旅行|行程|攻略|路线|景点)/.test(query)
+  if (!shouldGenerate || !itineraryText) return ''
+  const items = await buildRouteImages(query, itineraryText)
+  return formatRouteImagesMarkdown(items)
 }
 
 /**
@@ -350,11 +379,16 @@ const sendMessagePlain = async () => {
       userId.value
     )
     isTyping.value = false
-    messages.value.push({
+    const assistantRow = {
       role: 'assistant',
       content: reply,
       timestamp: Date.now()
-    })
+    }
+    messages.value.push(assistantRow)
+    const routeAppendix = await appendRouteImagesToAssistant(userMessage.content, reply)
+    if (routeAppendix) {
+      assistantRow.content += routeAppendix
+    }
   } catch (e) {
     console.error(e)
     isTyping.value = false
@@ -380,6 +414,13 @@ const sendMessageStream = async () => {
     )
     await tw.flushRest()
     tw.finalize(full)
+    const routeAppendix = await appendRouteImagesToAssistant(userMessage.content, full)
+    if (routeAppendix && messages.value.length > 0) {
+      const lastMessage = messages.value[messages.value.length - 1]
+      if (lastMessage?.role === 'assistant') {
+        lastMessage.content = `${lastMessage.content || ''}${routeAppendix}`
+      }
+    }
   } catch (e) {
     console.error(e)
     tw.abortForError()

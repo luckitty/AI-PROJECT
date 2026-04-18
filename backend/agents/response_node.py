@@ -6,7 +6,11 @@ import time
 def should_enforce_travel_format(tool_text: str) -> bool:
     """判断是否需要启用旅游结构化输出校验。"""
     text = (tool_text or "").strip()
-    return "【行程输出要求（必须遵守）】" in text
+    return (
+        "【TRAVEL_OUTPUT_CONTRACT:ITINERARY】" in text
+        or "【TRAVEL_OUTPUT_CONTRACT:FOOD】" in text
+        or "【行程输出要求（必须遵守）】" in text
+    )
 
 
 def is_travel_answer_compliant(answer_text: str) -> bool:
@@ -44,7 +48,7 @@ def response_node(state):
         {system_prompt}
 
         回答规则（必须遵守）：
-        1) 如果“实时信息、工具结果”里出现“【行程输出要求（必须遵守）】”，你必须严格按照该要求和结构输出，不能改写为普通概述。
+        1) 如果“实时信息、工具结果”里出现“【TRAVEL_OUTPUT_CONTRACT:ITINERARY】”或“【TRAVEL_OUTPUT_CONTRACT:FOOD】”（兼容“【行程输出要求（必须遵守）】”），你必须严格按照该合同输出，不能改写为普通概述。
         2) 当工具结果是旅游攻略材料时，优先依据工具结果组织回答，不要忽略其中的格式约束。
         3) 如果工具结果里已有内容，禁止输出“工具不可用/无法直接生成”之类措辞，直接给出可执行路线。
 
