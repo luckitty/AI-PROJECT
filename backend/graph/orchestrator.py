@@ -20,7 +20,7 @@ class AgentOrchestrator:
             config={"configurable": {"thread_id": session_id}},
         )
 
-        print("result===========result \n", result, "\n")
+        # print("result===========result \n", result[:200], "\n")
 
         return result.get("final_answer", "")
 
@@ -31,9 +31,10 @@ class AgentOrchestrator:
         session_id: str = "",
         system_prompt: str = "",
     ):
-        # stream_mode="messages" 会把图中 LLM 节点产生的消息增量往外透传。
+        # 使用 custom：由 response 节点内 get_stream_writer 显式写入增量，
+        # 不依赖 LLM 回调链，避免「整段才出」或中间长时间无包（messages 模式在自定义节点里不稳定）。
         return self.graph.stream(
             build_initial_state(query, user_id, session_id, system_prompt),
             config={"configurable": {"thread_id": session_id}},
-            stream_mode="messages",
+            stream_mode="custom",
         )

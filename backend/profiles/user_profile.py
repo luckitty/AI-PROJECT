@@ -63,7 +63,6 @@ def get_user_profile(user_id: str) -> dict:
         # JSON 根可能是 []、"字符串" 等，loads 不一定是 dict；非 dict 时降级为空，避免后面当字典用报错。
         return data if isinstance(data, dict) else {}
     except Exception as exc:
-        print("get_user_profile===========error \n", str(exc), "\n")
         return {}
 
 
@@ -108,9 +107,7 @@ def save_user_profile(user_id: str, profile: dict) -> dict:
     try:
         key = build_user_profile_key(user_id)
         current_profile = get_user_profile(user_id)
-        print("save_user_profile===========current_profile \n", current_profile, "\n")
         merged_profile = merge_user_profile(current_profile, profile)
-        print("save_user_profile===========merged_profile \n", merged_profile, "\n")
         # timezone.utc：明确用 UTC，避免服务器本地时区不同导致时间混乱；isoformat() 得到 ISO8601 字符串。
         merged_profile["updated_at"] = datetime.now(timezone.utc).isoformat()
 
@@ -118,10 +115,8 @@ def save_user_profile(user_id: str, profile: dict) -> dict:
         payload = json.dumps(merged_profile, ensure_ascii=False)
         # setex：SET + 过期时间一条命令完成；秒数到期后 Redis 自动删 key（与 USER_PROFILE_TTL_SECONDS 一致）。
         get_profile_redis_client().setex(key, USER_PROFILE_TTL_SECONDS, payload)
-        print("save_user_profile===========payload \n", payload, "\n")
         return merged_profile
     except Exception as exc:
-        print("save_user_profile===========error \n", str(exc), "\n")
         return {}
 
 

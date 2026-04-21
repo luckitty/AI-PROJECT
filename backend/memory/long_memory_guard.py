@@ -78,7 +78,6 @@ def should_search_long_memory_by_agent(user_input: str) -> bool:
     response = get_llm().invoke(classify_prompt)
     result = getattr(response, "content", "")
     decision = normalize_yes_no(result)
-    print("should_search_long_memory_by_agent===========raw \n", decision, "\n")
     return decision == "YES"
 
 
@@ -107,13 +106,11 @@ def build_memory_context(user_input: str, user_id: str | None) -> str:
     should_search = should_search_long_memory(user_input)
     if not should_search:
         return ""
-    print("build_memory_context===========should_search \n", should_search, "\n")
 
     docs = search_long_memory(user_input, user_id, k=4)
     if not docs:
         return ""
     memory_texts = [doc.page_content for doc in docs if (doc.page_content or "").strip()]
-    print("memory_texts=========== \n", memory_texts, "\n")
     return "\n".join(memory_texts)
 
 
@@ -132,7 +129,6 @@ def should_save_long_memory(user_text: str) -> bool:
 
     response = get_llm().invoke(classify_prompt)
     result = getattr(response, "content", "")
-    print("should_save_long_memory===========raw \n", result, "\n\n")
     if normalize_yes_no(result) == "YES":
         return True
     return False

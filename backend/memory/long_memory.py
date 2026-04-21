@@ -37,7 +37,6 @@ def disable_long_memory(reason: str) -> None:
     global long_memory_warned
     long_memory_disabled = True
     if not long_memory_warned:
-        print("long_memory===========disabled \n", reason, "\n\n")
         long_memory_warned = True
 
 

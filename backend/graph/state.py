@@ -11,6 +11,7 @@ class AgentState(TypedDict):
     need_memory: bool
 
     rag_context: Optional[str]
+    travel_context: Optional[str]
     tool_result: Optional[str]
     memory_context: Optional[str]
 
@@ -38,6 +39,7 @@ def build_initial_state(
         "need_memory": False,
         
         "rag_context": None,
+        "travel_context": None,
         "tool_result": None,
         "memory_context": None,
         "final_answer": None,

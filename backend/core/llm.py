@@ -4,9 +4,6 @@ LLM 模块 - 统一管理 LLM 实例
 from langchain_openai import ChatOpenAI
 from core.config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, MODEL_NAME
 
-
-print("MODEL_NAME=========",MODEL_NAME)
-
 def get_llm(
     model: str = MODEL_NAME,
     temperature: float = 0,

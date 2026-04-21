@@ -84,7 +84,7 @@ function parseSseDataPayload(raw) {
 /**
  * 流式请求 POST /api/chat/stream（SSE）。
  * 首包到达前的「三个点」由 ChatInterface.vue 在首次 onChunk 之前保持 isTyping；
- * 每解析出一小段正文会调 onChunk，用于打字机效果。
+ * 每解析出一小段正文会调 onChunk，由页面直接拼进助手气泡（与常见 ChatGPT 类流式一致）。
  */
 export const sendChatMessageStream = async (
   message,
@@ -135,7 +135,7 @@ export const sendChatMessageStream = async (
         const piece = parseSseDataPayload(raw)
         if (piece) {
           fullResponse += piece
-          // 这里把「网络刚到的一小段」交给页面；页面可以再做成逐字符动画
+          // 交给页面直接追加到助手气泡（流式展示）
           if (typeof onChunk === 'function') onChunk(piece)
         }
       }

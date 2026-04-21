@@ -16,7 +16,6 @@ knowledge_reranker = None
 
 def ensure_rag():
     global rag_ready, hybrid_retriever, knowledge_reranker
-    print("ensure_rag===========确保RAG \n", rag_ready, "\n\n")
     if rag_ready:
         return
     embedding = get_embeddings()
@@ -24,9 +23,7 @@ def ensure_rag():
     # 使用chroma
     # vector_store = get_vectorstore(docs, embedding)
     # 使用milvus
-    print("get_vectorstore_milvus:=========\n", datetime.now(), "\n\n")
     vector_store = get_vectorstore_milvus(docs, embedding)
-    print("add_documents:=========\n", datetime.now(), "\n\n")
     hybrid_retriever = HybridRetriever(vector_store, docs)
     use_rerank = os.getenv("USE_RERANKER", "1").lower() not in ("0", "false", "no")
     knowledge_reranker = Reranker() if use_rerank else NoOpReranker()

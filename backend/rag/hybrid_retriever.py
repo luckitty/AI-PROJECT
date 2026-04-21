@@ -29,7 +29,6 @@ class HybridRetriever:
         # ===== 1️⃣ BM25 检索（带分词）
         tokenized_query = list(jieba.cut(query))
         bm25_scores = self.bm25.get_scores(tokenized_query)
-        print("bm25_scores:=========\n", bm25_scores, "\n\n")
         bm25_topk_idx = np.argsort(bm25_scores)[::-1][:k]
 
         # ===== 2️⃣ 向量检索（MMR）=====

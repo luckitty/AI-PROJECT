@@ -239,32 +239,20 @@ function formatSendError(e) {
 }
 
 /**
- * 流式回复的「打字机」：SSE 可能一次推一大段，先放进 pending，再按帧写入气泡。
- * 返回 { push, flushRest, finalize, abortForError }，供 sendMessageStream 调用。
+ * 流式回复（对齐常见 ChatGPT 类产品）：SSE 每来一段就立刻拼进气泡，不在前端二次限速。
+ * 滚动用 requestAnimationFrame 合并到每帧最多一次，避免极小 chunk 刷屏时反复触发布局。
+ * 返回 { push, finalize, abortForError }，供 sendMessageStream 调用。
  */
-function createStreamTypewriter() {
+function createStreamDirectWriter() {
   let aiIndex = -1
-  let pending = ''
-  let rafId = null
-  const PUMP = 10 // 每帧显示字数（越小越慢）
-  const DRAIN = 25 // 流结束后加快排空 pending
+  let scrollRafId = null
 
-  const stopRaf = () => {
-    if (rafId != null) {
-      cancelAnimationFrame(rafId)
-      rafId = null
-    }
-  }
-
-  const pump = () => {
-    rafId = null
-    if (aiIndex < 0 || pending.length === 0) return
-    const row = messages.value[aiIndex]
-    const n = Math.min(PUMP, pending.length)
-    row.content += pending.slice(0, n)
-    pending = pending.slice(n)
-    void nextTick(() => scrollToBottom())
-    if (pending.length > 0) rafId = requestAnimationFrame(pump)
+  const scheduleScrollToBottom = () => {
+    if (scrollRafId != null) return
+    scrollRafId = requestAnimationFrame(() => {
+      scrollRafId = null
+      void nextTick(() => scrollToBottom())
+    })
   }
 
   const ensureRow = () => {
@@ -280,40 +268,21 @@ function createStreamTypewriter() {
   }
 
   return {
+    /** 网络层解析出的正文增量，直接追加 */
     push(text) {
+      if (!text) return
       ensureRow()
-      pending += text
-      if (rafId == null) rafId = requestAnimationFrame(pump)
+      const row = messages.value[aiIndex]
+      row.content += text
+      scheduleScrollToBottom()
     },
-    /** 流结束：停掉 pump，把队列里剩余字符尽快画完 */
-    async flushRest() {
-      stopRaf()
-      if (aiIndex < 0) return
-      await new Promise((resolve) => {
-        const tick = () => {
-          if (pending.length === 0) {
-            resolve()
-            return
-          }
-          const row = messages.value[aiIndex]
-          const n = Math.min(DRAIN, pending.length)
-          row.content += pending.slice(0, n)
-          pending = pending.slice(n)
-          void nextTick(() => scrollToBottom())
-          requestAnimationFrame(tick)
-        }
-        tick()
-      })
-    },
-    /** 出错：停 RAF，把 pending 一次性拼上，避免半截丢字 */
+    /** 出错：关 streaming，无正文则移除空气泡 */
     abortForError() {
-      stopRaf()
-      if (aiIndex >= 0 && pending) {
-        const row = messages.value[aiIndex]
-        if (row) row.content += pending
-        pending = ''
-      }
       isTyping.value = false
+      if (scrollRafId != null) {
+        cancelAnimationFrame(scrollRafId)
+        scrollRafId = null
+      }
       if (aiIndex >= 0) {
         const row = messages.value[aiIndex]
         row.streaming = false
@@ -364,25 +333,24 @@ const sendMessagePlain = async () => {
   }
 }
 
-/** 流式：sendChatMessageStream + 打字机；首包到之前三个点 */
+/** 流式：sendChatMessageStream + 收到即追加；首包到之前三个点 */
 const sendMessageStream = async () => {
   console.log("sendMessageStream===========流式发送消息 \n", userId.value, "\n\n")
   const userMessage = await startUserTurn()
   if (!userMessage) return
-  const tw = createStreamTypewriter()
+  const writer = createStreamDirectWriter()
   try {
     const full = await sendChatMessageStream(
       userMessage.content,
       DEFAULT_CHAT_MODEL,
       sessionId.value,
       userId.value,
-      tw.push
+      writer.push
     )
-    await tw.flushRest()
-    tw.finalize(full)
+    writer.finalize(full)
   } catch (e) {
     console.error(e)
-    tw.abortForError()
+    writer.abortForError()
     pushErrorAssistant(formatSendError(e))
   } finally {
     await endUserTurn()

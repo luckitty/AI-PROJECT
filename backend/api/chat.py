@@ -5,7 +5,6 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Any, Optional
-from langchain_core.messages import AIMessage
 import json
 # 使用相对导入
 from agents.assistant import (
@@ -24,98 +23,16 @@ from graph.orchestrator import AgentOrchestrator
 # 图编排：planner → memory | rag | tool → response（与 create_assistant 二选一或分流使用）
 agent_graph = AgentOrchestrator()
 
-# 不向 SSE 推送这些节点的 LLM 输出；仅屏蔽名单，避免误伤 response（见 extract_langgraph_node_name）。
-STREAM_HIDDEN_GRAPH_NODES = frozenset(
-    {"planner", "memory", "rag", "tool", "save_memory"}
-)
-
-
-def extract_langgraph_node_name(metadata: dict) -> Optional[str]:
+def sse_payload_from_custom_stream_chunk(chunk: Any) -> str:
     """
-    从 LangGraph 流式 metadata 解析当前节点短名。
-    新版里 langgraph_node 可能是 list（如 [\"response\"]）或带路径的字符串，不能再用 ``!= \"response\"`` 字符串比较。
-    """
-    if not metadata:
-        return None
-    raw: Any = metadata.get("langgraph_node")
-    if raw is None:
-        raw = metadata.get("langgraph_node_path")
-    if isinstance(raw, (list, tuple)) and len(raw) > 0:
-        raw = raw[-1]
-    if not isinstance(raw, str):
-        return None
-    name = raw.strip()
-    if not name:
-        return None
-    if "/" in name:
-        name = name.split("/")[-1]
-    return name
-
-
-def looks_like_planner_route_json(text: str) -> bool:
-    """metadata 异常时仍可能漏出 planner 的路由 JSON，按内容再挡一层。"""
-    t = (text or "").strip()
-    if not t.startswith("{"):
-        return False
-    try:
-        data = json.loads(t)
-    except (json.JSONDecodeError, TypeError, ValueError):
-        return False
-    if not isinstance(data, dict):
-        return False
-    return "need_rag" in data and "need_tool" in data and "need_memory" in data
-
-
-# 把 AIMessage.content 转成可展示的纯文本（str / 多模态 list 均支持）。
-def message_content_to_text(content) -> str:
-    """把 AIMessage.content 转成可展示的纯文本（str / 多模态 list 均支持）。"""
-    if content is None:
-        return ""
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-         # 提取所有 type 为 text 的块
-        texts = [block.get("text", "") for block in content 
-                 if isinstance(block, dict) and block.get("type") == "text"]
-        return "".join(texts)
-    return str(content)
-
-# 流式输出
-def stream_chunk_text(chunk) -> str:
-    """
-    解析 LangGraph ``stream_mode="messages"`` 的单次产出，得到应推给前端的文本。
-
-    - 入参多为 ``(message, metadata)``，先取 ``message``。
-    - 只输出 **AIMessage**（含流式用的 AIMessageChunk）：与 ``invoke`` 取最后一条助手回复语义一致。
-    - 若 AIMessage 仅有 ``tool_calls``、无可见正文，视为「路由到工具」的中间态，不推送。
-    - ``messages`` 模式会透出图中每一次 LLM 调用；非流式 ``invoke`` 也会在 ``on_llm_end`` 打出整段
-      正文，因此 planner 的路由 JSON 会混进 SSE。metadata 里 ``langgraph_node`` 标明来源节点，
-      只把 ``response`` 节点的文本推给前端。
+    解析 LangGraph ``stream_mode="custom"`` 的单次产出。
+    response 节点通过 ``get_stream_writer`` 写入 ``{"content": "增量"}``，此处取出正文增量给 SSE。
     """
     if chunk is None:
         return ""
-
-    msg = chunk
-    metadata = None
-    # LangGraph 对 messages 模式约定为 (BaseMessage, metadata_dict)。
-    if isinstance(chunk, tuple) and len(chunk) >= 2 and isinstance(chunk[1], dict):
-        msg = chunk[0]
-        metadata = chunk[1]
-
-    if metadata is not None:
-        node_name = extract_langgraph_node_name(metadata)
-        if node_name in STREAM_HIDDEN_GRAPH_NODES:
-            return ""
-
-    if not isinstance(msg, AIMessage):
-        return ""
-
-    text = message_content_to_text(getattr(msg, "content", None))
-    if looks_like_planner_route_json(text):
-        return ""
-    if getattr(msg, "tool_calls", None) and not text.strip():
-        return ""
-    return text
+    if isinstance(chunk, dict):
+        return str(chunk.get("content") or chunk.get("message") or "")
+    return ""
 
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
@@ -167,7 +84,7 @@ async def chat(request: ChatRequest):
             session_id,
             system_prompt=DEFAULT_SYSTEM_PROMPT,
         )
-        print("response===========图编排响应 \n", reply, "\n\n")
+        # print("response===========图编排响应 \n", reply, "\n\n")
         # 记忆写入放到后台，优先保证主请求低延迟返回。
         # start_long_memory_save_task(request.message, user_id)
 
@@ -204,7 +121,7 @@ async def chat_stream(request: ChatRequest):
                 session_id ,
                 system_prompt=DEFAULT_SYSTEM_PROMPT,
             ):
-                token = stream_chunk_text(chunk)
+                token = sse_payload_from_custom_stream_chunk(chunk)
                 if token:
                     # 一行一个 JSON 对象，json.dumps把对象解析成字符串后前端按行解析后取 content，再交给 onChunk
                     yield f"data: {json.dumps({'content': token}, ensure_ascii=False)}\n\n"

@@ -6,10 +6,11 @@ from core.llm import get_llm
 
 def planner_node(state):
     query = state["query"]
+    # 旅游意图做显式规则短路：保证「旅游攻略」稳定进入 rag_travel -> search_travel 的固定链路。
 
     prompt = f"""你是任务路由器。仅根据用户当前这句话判断是否需要以下能力：
-        1) need_rag: 需要从知识库/文档检索事实（本地知识库只涉及到王安宇、樊振东、李荣浩，其他的不要检索）
-        2) need_tool: 需要外部工具/API/实时数据/执行动作；包括联网搜索(web_search)、本地旅游笔记缓存检索(search_travel)等；用户问**旅游攻略、行程、景点、美食、某地怎么玩**等需要工具从缓存或网络取材料时设为 true
+        1) need_rag: 明确是旅游攻略/路线规划/景点美食推荐类问题，返回 true
+        2) need_tool: 需要外部工具/API/实时数据/执行动作；包括联网搜索(web_search)；
         3) need_memory: 需要读取或写入用户长期记忆
 
         判定规则：
@@ -35,6 +36,6 @@ def planner_node(state):
     return {
         **state,
         "need_rag": bool(plan.get("need_rag", False)),
-        "need_tool": bool(plan.get("need_tool", False)),
-        "need_memory": bool(plan.get("need_memory", False)),
+        "need_tool": bool(plan.get("need_tool", False)) ,
+        "need_memory": bool(plan.get("need_memory", False)) ,
     }
