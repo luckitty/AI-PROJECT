@@ -54,7 +54,7 @@ def match_cached_poi_name(token: str, cache_names: set[str]) -> str | None:
     return None
 
 
-def build_itinerary_format_instruction(query: str) -> str:
+def build_itinerary_format_instruction() -> str:
     """
     生成旅游攻略输出格式约束，要求回答按天给出可执行路线与餐饮建议。
     """
@@ -237,7 +237,7 @@ def build_llm_itinerary_bundle(docs, query: str = "") -> dict:
     if not candidate_restaurants and not candidate_attractions:
         return {"visible_answer": "", "itinerary_structured": ""}
 
-    format_instruction = build_itinerary_format_instruction(query)
+    format_instruction = build_itinerary_format_instruction()
     prompt = f"""
 你是旅游行程助手，请只输出 JSON，不要输出任何解释。
 

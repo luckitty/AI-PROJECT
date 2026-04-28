@@ -42,10 +42,7 @@ def list_available_cities() -> List[str]:
         return []
     global cached_city_file_signature, cached_city_names
     city_files = sorted(CACHE_DIR.glob("*.json"))
-    print("city_files===========city_files \n", city_files, cached_city_names,"\n")
-
     current_signature = tuple((p.name, p.stat().st_mtime, p.stat().st_size) for p in city_files)
-    print("current_signature===========current_signature \n", current_signature, "\n")
     if current_signature == cached_city_file_signature and cached_city_names:
         return cached_city_names
     # 命中多个城市时按长度优先匹配，因此这里提前按长度降序缓存，后续 detect 可直接复用。
@@ -283,6 +280,7 @@ def retrieve_travel_docs(query: str, top_k: int = 4) -> List:
         effective_top_k = min(max(top_k, 10), len(docs))
     initial_k = max(effective_top_k * 3, effective_top_k, 24)
     initial_k = min(initial_k, len(docs))
+    print("initial_k===========initial_k \n", initial_k, "\n")
     candidates = vectorstore.similarity_search(query, k=initial_k)
 
     return rerank_docs_by_structured_profile(
