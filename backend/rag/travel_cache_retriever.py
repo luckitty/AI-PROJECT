@@ -35,71 +35,17 @@ for field_name, keywords in INTENT_FIELD_KEYWORDS.items():
 cached_city_file_signature = tuple()
 cached_city_names = []
 
-# 用户问题命中这些片段时视为「美食向」查询：需要多召回 + 与城市内美食笔记合并。
-FOOD_FOCUS_KEYWORDS = (
-    "美食",
-    "好吃的",
-    "小吃",
-    "必吃",
-    "餐厅",
-    "美食攻略",
-    "吃货",
-    "去哪吃",
-    "吃啥",
-    "打卡美食",
-    "特色菜",
-)
-
-
-def is_food_focus_query(query: str) -> bool:
-    """判断用户是否在问美食/吃喝类问题，用于放大召回与合并同城美食笔记。"""
-    q = query or ""
-    return any(keyword in q for keyword in FOOD_FOCUS_KEYWORDS)
-
-
-def metadata_suggests_food(metadata: dict) -> bool:
-    """
-    判断单条笔记元数据是否明显与餐饮相关，用于「城市 + 美食」场景下补齐向量漏召的笔记。
-    与 extract_foods 抽取结果互补：有的正文只写店名/菜名，未必命中 FOOD_KEYWORDS。
-    """
-    if not metadata:
-        return False
-    foods_text = str(metadata.get("foods_text") or "").strip()
-    if foods_text:
-        return True
-    tags_text = str(metadata.get("tags_text") or "")
-    if "美食" in tags_text:
-        return True
-    title = str(metadata.get("title") or "")
-    desc = str(metadata.get("desc") or "")
-    combined = f"{title}\n{desc}"
-    food_hints = (
-        "美食",
-        "餐厅",
-        "小吃",
-        "必吃",
-        "火锅",
-        "烤鸭",
-        "奶茶",
-        "咖啡",
-        "早茶",
-        "烧烤",
-        "米其林",
-        "早餐",
-        "午餐",
-        "晚餐",
-        "夜宵",
-    )
-    return any(hint in combined for hint in food_hints)
-
-
 def list_available_cities() -> List[str]:
     """列出 cache 目录里可路由的城市名（文件名去掉 .json），并复用进程内缓存。"""
+
     if not CACHE_DIR.is_dir():
         return []
     global cached_city_file_signature, cached_city_names
     city_files = sorted(CACHE_DIR.glob("*.json"))
+    print("city_files===========city_files \n", city_files, cached_city_names,"\n")
+
     current_signature = tuple((p.name, p.stat().st_mtime, p.stat().st_size) for p in city_files)
+    print("current_signature===========current_signature \n", current_signature, "\n")
     if current_signature == cached_city_file_signature and cached_city_names:
         return cached_city_names
     # 命中多个城市时按长度优先匹配，因此这里提前按长度降序缓存，后续 detect 可直接复用。
@@ -326,47 +272,24 @@ def ensure_travel_vectorstore(query: str):
 def retrieve_travel_docs(query: str, top_k: int = 4) -> List:
     """
     旅游缓存语义检索：先向量召回，再用结构化字段重排，返回 top_k 条。
-    当问题同时命中「城市 + 美食」时，把同城且明显含餐饮信息的笔记并入候选，避免只返回少数向量最相近的泛攻略。
     """
     docs, vectorstore = ensure_travel_vectorstore(query)
     if not docs or vectorstore is None:
         return []
     city_name = detect_city_from_query(query)
-    food_focus = is_food_focus_query(query)
-    # 美食向：多取候选并允许更大的最终条数，否则「北京美食」只能看到 4 条泛笔记。
+    # 城市旅游问题需要足够覆盖面，否则候选景点会缺「颐和园/鸟巢/水立方」这类核心点。
     effective_top_k = min(top_k, len(docs))
-    if food_focus:
-        effective_top_k = min(max(top_k, 16), len(docs))
-    initial_k = max(effective_top_k * 4, effective_top_k, 32) if food_focus else max(top_k * 3, top_k)
+    if city_name:
+        effective_top_k = min(max(top_k, 10), len(docs))
+    initial_k = max(effective_top_k * 3, effective_top_k, 24)
     initial_k = min(initial_k, len(docs))
     candidates = vectorstore.similarity_search(query, k=initial_k)
-
-    # 已命中城市名时，把「同城 + 餐饮相关」且尚未出现在向量候选里的笔记补进来。
-    if food_focus and city_name:
-        seen = set()
-        for doc in candidates:
-            key = (doc.metadata or {}).get("doc_id") or (doc.metadata or {}).get("note_id")
-            if key:
-                seen.add(key)
-        for doc in docs:
-            meta = doc.metadata or {}
-            if str(meta.get("city") or "") != city_name:
-                continue
-            if not metadata_suggests_food(meta):
-                continue
-            key = meta.get("doc_id") or meta.get("note_id")
-            if key and key in seen:
-                continue
-            if key:
-                seen.add(key)
-            candidates.append(doc)
 
     return rerank_docs_by_structured_profile(
         candidates,
         query,
         effective_top_k,
         city_name=city_name,
-        food_focus=food_focus,
     )
 
 
@@ -390,13 +313,11 @@ def rerank_docs_by_structured_profile(
     query: str,
     top_k: int,
     city_name: Optional[str] = None,
-    food_focus: Optional[bool] = None,
 ) -> list:
     """结合城市与意图字段进行轻量重排，提升垂类问题命中率。"""
-    # 调用方已算出城市/美食意图时直接复用，避免重复做城市文件扫描和关键词判定。
+    # 调用方已算出城市时直接复用，避免重复做城市文件扫描。
     city_name = city_name if city_name is not None else (detect_city_from_query(query) or "")
     intent_fields = infer_query_intent_fields(query)
-    food_focus = food_focus if food_focus is not None else is_food_focus_query(query)
     scored_items = []
     for rank, doc in enumerate(candidates):
         metadata = doc.metadata or {}
@@ -404,9 +325,6 @@ def rerank_docs_by_structured_profile(
         doc_city = str(metadata.get("city") or "")
         if city_name and city_name == doc_city:
             score += 4
-        # 美食向问题：强提餐饮信号明显的笔记，避免「北京美食」仍被纯景点攻略挤到后面。
-        if food_focus and metadata_suggests_food(metadata):
-            score += 6
         for field_name in intent_fields:
             field_text = str(metadata.get(field_name) or "")
             if not field_text:

@@ -15,6 +15,7 @@ class AgentState(TypedDict):
     tool_result: Optional[str]
     memory_context: Optional[str]
 
+    is_interrupted: bool
     final_answer: Optional[str]
 
 
@@ -42,5 +43,6 @@ def build_initial_state(
         "travel_context": None,
         "tool_result": None,
         "memory_context": None,
+        "is_interrupted": False,
         "final_answer": None,
     }

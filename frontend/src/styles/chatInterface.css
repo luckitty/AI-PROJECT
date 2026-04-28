@@ -454,6 +454,12 @@
   color: #2f3d31;
 }
 
+.message-text-streaming {
+  line-height: 1.65;
+  word-wrap: break-word;
+  color: #2f3d31;
+}
+
 .message.user .message-text {
   color: var(--bubble-user-text);
 }
@@ -507,7 +513,8 @@
   color: #607765;
 }
 
-.message-text :deep(pre) {
+.message-text :deep(pre),
+.message-text-streaming :deep(pre) {
   background-color: rgba(255, 255, 255, 0.55);
   padding: 12px;
   border-radius: 8px;
@@ -516,12 +523,14 @@
   border: 1px solid var(--border-subtle);
 }
 
-.message.user .message-text :deep(pre) {
+.message.user .message-text :deep(pre),
+.message.user .message-text-streaming :deep(pre) {
   background-color: rgba(0, 0, 0, 0.12);
   border-color: rgba(255, 255, 255, 0.2);
 }
 
-.message-text :deep(code) {
+.message-text :deep(code),
+.message-text-streaming :deep(code) {
   background-color: rgba(255, 255, 255, 0.5);
   padding: 2px 6px;
   border-radius: 4px;
@@ -529,32 +538,39 @@
   font-size: 0.9em;
 }
 
-.message.user .message-text :deep(code) {
+.message.user .message-text :deep(code),
+.message.user .message-text-streaming :deep(code) {
   background-color: rgba(0, 0, 0, 0.15);
 }
 
-.message-text :deep(p) {
+.message-text :deep(p),
+.message-text-streaming :deep(p) {
   margin: 8px 0;
 }
 
 .message-text :deep(ul),
-.message-text :deep(ol) {
+.message-text :deep(ol),
+.message-text-streaming :deep(ul),
+.message-text-streaming :deep(ol) {
   padding-left: 20px;
   margin: 8px 0;
 }
 
-.message-text :deep(li) {
+.message-text :deep(li),
+.message-text-streaming :deep(li) {
   margin: 4px 0;
 }
 
-.message-text :deep(blockquote) {
+.message-text :deep(blockquote),
+.message-text-streaming :deep(blockquote) {
   border-left: 3px solid var(--accent);
   padding-left: 12px;
   margin: 8px 0;
   color: var(--text-sidebar-muted);
 }
 
-.message.user .message-text :deep(blockquote) {
+.message.user .message-text :deep(blockquote),
+.message.user .message-text-streaming :deep(blockquote) {
   border-left-color: rgba(255, 255, 255, 0.65);
   color: rgba(255, 255, 255, 0.88);
 }
@@ -606,23 +622,8 @@
   }
 }
 
-.message-text-streaming {
-  white-space: pre-wrap;
-  word-break: break-word;
-  line-height: 1.55;
-  font-size: 14px;
-  color: #2f3d31;
-}
-
-.stream-cursor {
-  color: var(--accent);
-  animation: blink 1s step-end infinite;
-}
-
-@keyframes blink {
-  50% {
-    opacity: 0;
-  }
+.message-text-streaming .stream-markdown {
+  display: inline;
 }
 
 /* 输入区域 */

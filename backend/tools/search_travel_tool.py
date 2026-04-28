@@ -7,15 +7,14 @@ from typing import List
 
 from langchain.tools import tool
 
-from rag.travel_cache_retriever import is_food_focus_query, retrieve_travel_docs
+from rag.travel_cache_retriever import retrieve_travel_docs
 from tools.travel_itinerary_builder import (
     build_itinerary_format_instruction,
-    generate_travel_draft,
+    build_llm_itinerary_bundle,
 )
 
-TOP_K_NOTES = 4
-# 美食类问题需要覆盖同城多条笔记；具体上限仍受 retrieve_travel_docs 与数据量约束。
-TOP_K_FOOD = 10
+# 普通旅游问题需要足够的素材覆盖景点集合；4 条容易漏掉城市核心景点。
+TOP_K_NOTES = 10
 
 # 用于从正文/OCR 里截取「和吃喝更相关」的一小段，供美食类紧凑摘要使用（非穷举，覆盖常见口语）。
 FOOD_SNIPPET_HINTS = (
@@ -95,103 +94,60 @@ def build_note_block(note: dict) -> str:
     return "\n\n".join(parts)
 
 
-def build_compact_material_summary(docs, query: str = "") -> str:
+def build_travel_material(query: str, docs) -> str:
     """
-    把检索文档压成紧凑摘要，确保模型在长文本被截断时仍能拿到核心事实。
-    美食类问题时优先展示结构化餐饮字段（foods_text、标签）与正文/OCR 中与吃喝相关的片段，避免只显示标题+泛化攻略前几句。
+    统一组装“结构约束+风格建议+素材明细”，作为旅游路线生成唯一输入，
+    让结构规则与文风建议分层，避免多处拼接导致约束漂移。
     """
-    food_focus = is_food_focus_query((query or "").strip())
-    lines: List[str] = []
+    # 构建行程格式要求 规则
+    format_instruction = build_itinerary_format_instruction(query)
+    # 单次遍历构建素材明细，避免重复遍历 docs。
+    blocks: List[str] = []
     for rank, doc in enumerate(docs, start=1):
         metadata = doc.metadata or {}
         title = (metadata.get("title") or "").strip() or "(无标题)"
         desc = (metadata.get("desc") or "").strip().replace("\n", " ")
         note_id = str(metadata.get("note_id") or "")
-        if not food_focus:
-            short_desc = desc[:180] + ("..." if len(desc) > 180 else "")
-            lines.append(f"- 结果{rank} | note_id={note_id} | 标题={title} | 摘要={short_desc}")
-            continue
-        foods_text = (metadata.get("foods_text") or "").strip()
-        tags_text = (metadata.get("tags_text") or "").strip()
-        ocr_text = (metadata.get("ocr_text") or "").strip()
-        foods_short = (
-            foods_text[:100] + ("..." if len(foods_text) > 100 else "")
-            if foods_text
-            else "（建库未抽到餐饮关键词，请看下方正文/配图摘要）"
-        )
-        tags_short = tags_text[:72] + ("..." if len(tags_text) > 72 else "") if tags_text else ""
-        snippet = pick_food_related_snippet(desc, ocr_text, max_len=220)
-        extra_tags = f" | 标签={tags_short}" if tags_short else ""
-        lines.append(
-            f"- 结果{rank} | note_id={note_id} | 标题={title} | 餐饮关键词={foods_short}{extra_tags}"
-            f" | 正文或配图摘要={snippet}"
-        )
-    return "\n".join(lines)
-
-
-def build_travel_material(query: str, docs) -> str:
-    """
-    统一组装“规则+摘要+素材明细”，作为旅游路线生成唯一输入，避免多处拼接导致约束漂移。
-    """
-    # 构建行程格式要求 规则
-    format_instruction = build_itinerary_format_instruction(query)
-    # 构建素材紧凑摘要
-    compact_summary = build_compact_material_summary(docs, query)
-    # 构建素材明细
-    blocks = []
-    for rank, doc in enumerate(docs, start=1):
-        metadata = doc.metadata or {}
         note = {
-            "note_id": metadata.get("note_id"),
+            "note_id": note_id,
+            "title": title,
+            "desc": desc,
             "note_url": metadata.get("note_url"),
-            "title": metadata.get("title"),
-            "desc": metadata.get("desc"),
             "ocr_text": metadata.get("ocr_text"),
         }
-        try:
-            note_block = build_note_block(note)
-        except Exception as error:
-            # 单条素材构建失败时降级为简版，避免整次工具返回失败。
-            note_block = (
-                f"【标题】{(note.get('title') or '').strip() or '(无标题)'}\n\n"
-                f"【正文 desc】\n{(note.get('desc') or '').strip()}\n\n"
-                f"【配图 OCR 文字】（该条素材处理失败：{error}）"
-            )
+        note_block = build_note_block(note)
+
         blocks.append(f"========== 结果 {rank}（相似度排序） ==========\n{note_block}")
 
     return (
         format_instruction
-        + "\n\n【执行提醒】\n"
-        "- 优先使用下面的参考材料事实，不够再做合理补充，但不要偏离用户问题。\n"
+        + "\n\n【风格建议】\n"
+        "- 优先使用下面的事实信息，不够再做合理补充，但不要偏离用户问题。\n"
         "- 语言可以稍微幽默风趣一点，不要过于正式。\n"
-        "- 回答的时候可以适当使用表情或图标，提升可读性。\n"
-        "- 回答格式可以多元化，但不要破坏规则要求的结构。\n\n"
-        + "【素材紧凑摘要（优先使用）】但不要出现“素材”、“参考材料”等字眼\n"
-        + compact_summary
-        + "\n\n"
+        "- 回答时可以适当使用表情或图标，提升可读性。\n"
+        "- 表达形式可以多元化，但不要破坏上方结构约束。\n\n"
+        + "【素材明细（优先使用）】\n"
         + "\n\n".join(blocks)
     )
 
 
 @tool
-def search_travel(query: str) -> str:
-    """旅游行程专用工具：从本地 data/cache 语义检索笔记，组装规则与素材并直接生成路线初稿。"""
-    q = (query or "").strip()
-    if not q:
-        return "请提供具体的旅游攻略检索问题。"
-
-    top_k = TOP_K_FOOD if is_food_focus_query(q) else TOP_K_NOTES
-    docs = retrieve_travel_docs(q, top_k=top_k)
+def search_travel(query: str, rag_context: str) -> str:
+    """旅游行程专用工具：从本地 data/cache 语义检索笔记，组装规则与素材供最终流式回答使用。"""
+    docs = rag_context
     print("search_travel 命中文档数:", len(docs))
-    if not docs:
-        return "本地暂无缓存笔记（data/cache 为空或无法读取），请先通过其它方式导入缓存数据。"
 
-    travel_material = build_travel_material(q, docs)
-    # 工具层直接产出路线初稿，节点层只做编排，避免规则模板泄漏到 response 节点日志与用户输出。
-    travel_draft = generate_travel_draft(q, travel_material, docs)
+    travel_material = build_travel_material(query, docs)
+    # 单次调用大模型同时生成两份结果：
+    # - visible_answer：给用户看的攻略草稿
+    # - itinerary_structured：给高德路线补交通用的隐藏结构
+    itinerary_bundle = build_llm_itinerary_bundle(docs, query)
+    skeleton_json = str(itinerary_bundle.get("itinerary_structured") or "").strip()
+    visible_answer_draft = str(itinerary_bundle.get("visible_answer") or "").strip()
+    print("search_travel===========skeleton_json \n", skeleton_json, "\n")
     travel_output_payload = {
-        # 先产出结构化路线草稿，供 response 节点作为最终攻略骨架。
-        "itinerary_structured": travel_draft or "",
+        "itinerary_structured": skeleton_json,
+        "visible_answer_draft": visible_answer_draft,
         # 给 response_node 的最终旅游攻略素材：规则 + RAG 摘要 + 素材明细。
         "response_material": travel_material,
     }

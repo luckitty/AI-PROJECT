@@ -54,6 +54,16 @@ RESTAURANT_VALID_SUFFIXES = (
     "炸酱面",
     "鸡公煲",
     "卤煮",
+    # 老字号/品牌常见尾字，减少「便宜坊、天兴居、聚宝源」等被后缀规则误杀。
+    "坊",
+    "居",
+    "源",
+    "记",
+    "斋",
+    "德",
+    "楼",
+    "府",
+    "春",
 )
 RESTAURANT_NOISE_WORDS = (
     "探店",
@@ -131,7 +141,7 @@ def load_note_list_from_file(cache_file: Path) -> List[dict]:
     return []
 
 
-def collect_note_candidates(note: dict) -> Dict[str, List[str]]:
+def collect_note_candidates(note: dict, city_name: str = "") -> Dict[str, List[str]]:
     """提取单条笔记候选：先结构化字段，再正文补抽。"""
     title = str(note.get("title") or "").strip()
     desc = str(note.get("desc") or "").strip()
@@ -142,7 +152,8 @@ def collect_note_candidates(note: dict) -> Dict[str, List[str]]:
     restaurant_names = split_candidate_terms(str(note.get("foods_text") or ""))
     if merged_text:
         # 正文补抽用于补齐结构化字段缺失时的高频实体。
-        attraction_names.extend(extract_spots(merged_text, title))
+        # 传入城市名才会加载 data/travel_spot_rules/{城市}.json，与线上建库/抽取一致。
+        attraction_names.extend(extract_spots(merged_text, title, city_name=city_name))
         restaurant_names.extend([name.strip() for name in RESTAURANT_NAME_PATTERN.findall(merged_text)])
         # 这批是人工确认过的高频北京餐厅，正文命中时优先补齐。
         for name in KNOWN_BEIJING_RESTAURANTS:
@@ -164,9 +175,14 @@ def is_valid_poi_name(name: str, poi_type: str) -> bool:
 
     if name in KNOWN_BEIJING_RESTAURANTS:
         return True
+    # OCR/正文里常见「coffeeXX店」类噪声，不是中文店名实体。
+    if re.search(r"[A-Za-z]{3,}", name):
+        return False
     if name in GENERIC_WORDS["restaurant"]:
         return False
     if any(noise in name for noise in RESTAURANT_NOISE_WORDS):
+        return False
+    if any(token in name for token in ("和", "与", "及", "以及")):
         return False
     if len(name) > 10 and any(token in name for token in ("的", "了", "去", "也有", "可以", "就", "和")):
         return False
@@ -178,20 +194,67 @@ def is_valid_poi_name(name: str, poi_type: str) -> bool:
     return True
 
 
+def load_city_seed_restaurants(city_name: str) -> List[str]:
+    """
+    从 data/travel_spot_rules/{城市}.json 读取 seed_restaurants（人工维护的餐厅种子）。
+    与 must_include_names 等景点规则同文件、不同字段，避免和景点列表混写。
+    """
+    city = (city_name or "").strip()
+    if not city:
+        return []
+    rule_path = backend_root / "data" / "travel_spot_rules" / f"{city}.json"
+    if not rule_path.is_file():
+        return []
+    try:
+        payload = json.loads(rule_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(payload, dict):
+        return []
+    raw = payload.get("seed_restaurants") or payload.get("restaurant_seed_names")
+    if not isinstance(raw, list):
+        return []
+    names = []
+    for item in raw:
+        name = normalize_poi_name(str(item or ""))
+        if len(name) < 2 or len(name) > 30 or name in GENERIC_WORDS["restaurant"]:
+            continue
+        names.append(name)
+    return names
+
+
+def merge_seed_restaurants_into_pool(
+    pools: Dict[str, Dict[str, int]], city_name: str, min_count_restaurant: int
+) -> None:
+    """
+    把城市规则里的餐厅种子并入计数池，保证至少达到 min_count 以便进入最终 JSON。
+    种子单独保证频次，正文统计仍可用更高 min_count 抑制噪声。
+    """
+    min_req = max(1, int(min_count_restaurant or 1))
+    # 种子名单人工维护，至少给 2 次计数，避免与正文 min_count=2 时整表被清空。
+    seed_floor = max(min_req, 2)
+    for name in load_city_seed_restaurants(city_name):
+        current = int(pools["restaurant"].get(name) or 0)
+        pools["restaurant"][name] = max(current, seed_floor)
+
+
 def collect_city_pools(cache_files: List[Path]) -> Dict[str, Dict[str, int]]:
     """扫描城市缓存并构建景点/餐厅计数池。"""
     pools = {"attraction": {}, "restaurant": {}}
     city_name_set = {normalize_poi_name(file.stem) for file in cache_files}
 
     for cache_file in cache_files:
+        # 与 data/cache/北京.json 等文件名对齐，供 extract_spots 加载同城规则。
+        file_city = normalize_poi_name(cache_file.stem)
         for note in load_note_list_from_file(cache_file):
-            note_candidates = collect_note_candidates(note)
+            note_candidates = collect_note_candidates(note, city_name=file_city)
             for poi_type in ("attraction", "restaurant"):
                 for candidate in note_candidates[poi_type]:
                     name = normalize_poi_name(candidate)
                     if len(name) < 2 or len(name) > 40 or name in city_name_set:
                         continue
-                    if poi_type == "restaurant" and (len(name) < 3 or len(name) > 20):
+                    # 短品牌名（如「大董」）允许入库，便于与白名单/高德检索对齐。
+                    if poi_type == "restaurant" and (len(name) < 2 or len(name) > 20):
                         continue
                     if not is_valid_poi_name(name, poi_type):
                         continue
@@ -227,6 +290,7 @@ def build_travel_poi_cache(
 
     scanned_note_count = sum(len(load_note_list_from_file(file)) for file in cache_files)
     pools = collect_city_pools(cache_files)
+    merge_seed_restaurants_into_pool(pools, city_name, min_count_restaurant)
     # 与 travel_itinerary_builder 等消费方约定：景点/餐厅均为字符串数组。
     output_payload = {
         "attraction": build_output_list(
@@ -256,7 +320,12 @@ def main():
     parser.add_argument("--city-name", default="北京", help="只构建指定城市的缓存（默认: 北京）")
     parser.add_argument("--min-count-attraction", type=int, default=2, help="景点最小出现频次（默认: 2）")
     # 餐厅抽取噪声普遍高于景点，默认频次设为 2 可明显提升词典准确率。
-    parser.add_argument("--min-count-restaurant", type=int, default=2, help="餐厅最小出现频次（默认: 2）")
+    parser.add_argument(
+        "--min-count-restaurant",
+        type=int,
+        default=2,
+        help="餐厅最小出现频次（默认: 2，抑制误匹配；种子餐厅见 travel_spot_rules 里 seed_restaurants）",
+    )
     parser.add_argument("--top-attractions", type=int, default=300, help="景点最多保留多少条，0 表示不限制（默认: 300）")
     parser.add_argument("--top-restaurants", type=int, default=300, help="餐厅最多保留多少条，0 表示不限制（默认: 300）")
     args = parser.parse_args()

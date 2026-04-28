@@ -85,9 +85,10 @@
               v-if="message.role === 'assistant' && message.streaming"
               class="message-text message-text-streaming"
             >
-              <span class="stream-plain">{{ message.content }}</span><span class="stream-cursor">▍</span>
+              <!-- 流式阶段也实时走 Markdown 渲染，避免“生成中无格式、结束后才有格式”的割裂体验 -->
+              <div class="stream-markdown" v-html="message.streamingHtml || ''"></div>
             </div>
-            <div v-else class="message-text" v-html="renderMessage(message.content || '')"></div>
+            <div v-else class="message-text" v-html="message.html || ''"></div>
           </div>
         </div>
 
@@ -118,10 +119,10 @@
           ></textarea>
           <button
             class="send-btn"
-            @click="sendMessage"
-            :disabled="!userInput.trim() || isTyping"
+            @click="handleSendOrStop"
+            :disabled="!isTyping && !userInput.trim()"
           >
-            <span>→</span>
+            <span>{{ isTyping ? '■' : '→' }}</span>
           </button>
         </div>
         <div class="input-footer">
@@ -133,10 +134,17 @@
 </template>
 
 <script setup>
-import { ref, nextTick, onMounted } from 'vue'
+import { ref, nextTick, onMounted, onUnmounted } from 'vue'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
-import { sendChatMessage, sendChatMessageStream } from '@/api/chat'
+import {
+  abortChatRequest,
+  isAbortRequestError,
+  sendChatMessage,
+  sendChatMessageStream,
+  stopChatSession,
+  stopChatSessionKeepalive
+} from '@/api/chat'
 
 // 响应式数据
 const messages = ref([])
@@ -148,6 +156,7 @@ const DEFAULT_CHAT_MODEL = 'deepseek-chat'
 const replyMode = ref('stream')
 const messagesContainer = ref(null)
 const inputRef = ref(null)
+const autoScrollEnabled = ref(true)
 
 // 聊天历史
 const chatHistory = ref([])
@@ -169,14 +178,54 @@ const toggleSidebar = () => {
   sidebarCollapsed.value = !sidebarCollapsed.value
 }
 
-// 流式进行中用纯文本分支，不走 marked（见模板 message.streaming）
+// 统一 Markdown 渲染入口：普通消息使用缓存 html，流式消息使用 streamingHtml。
 const renderMessage = (content) => {
   if (!content) return ''
   const html = marked.parse(content)
   return DOMPurify.sanitize(html)
 }
 
-const scrollToBottom = async () => {
+// 统一创建可渲染消息，提前缓存 html，避免模板阶段反复执行 markdown 解析。
+function buildRenderedMessage(role, content, extra = {}) {
+  const safeContent = content || ''
+  return {
+    role,
+    content: safeContent,
+    html: renderMessage(safeContent),
+    timestamp: Date.now(),
+    ...extra
+  }
+}
+
+// 从本地历史恢复时补齐渲染字段，并移除不应保留的流式中间态字段。
+function normalizeMessagesForRender(list) {
+  return (list || []).map((message) => {
+    const safeContent = String(message?.content || '')
+    return {
+      ...message,
+      content: safeContent,
+      html: renderMessage(safeContent),
+      streaming: false,
+      streamingHtml: ''
+    }
+  })
+}
+
+const AUTO_SCROLL_BOTTOM_GAP = 60
+
+function isNearBottom() {
+  const el = messagesContainer.value
+  if (!el) return true
+  const gap = el.scrollHeight - el.scrollTop - el.clientHeight
+  return gap <= AUTO_SCROLL_BOTTOM_GAP
+}
+
+function updateAutoScrollStateByUserPosition() {
+  autoScrollEnabled.value = isNearBottom()
+}
+
+const scrollToBottom = async (force = false) => {
+  if (!force && !autoScrollEnabled.value) return
   await nextTick()
   if (messagesContainer.value) {
     messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight
@@ -205,37 +254,52 @@ const handleEnter = (e) => {
 /** 提交用户句、三个点、session；失败返回 null */
 async function startUserTurn() {
   if (!userInput.value.trim() || isTyping.value) return null
-  const userMessage = {
-    role: 'user',
-    content: userInput.value.trim(),
-    timestamp: Date.now()
-  }
+  const userMessage = buildRenderedMessage('user', userInput.value.trim())
   messages.value.push(userMessage)
   userInput.value = ''
   isTyping.value = true
+  autoScrollEnabled.value = true
   if (!sessionId.value) sessionId.value = crypto.randomUUID()
   await nextTick()
   adjustInputHeight()
-  await scrollToBottom()
+  await scrollToBottom(true)
   return userMessage
 }
 
 async function endUserTurn() {
   isTyping.value = false
-  await scrollToBottom()
+  autoScrollEnabled.value = true
+  await scrollToBottom(true)
   saveChatHistory()
 }
 
 function pushErrorAssistant(msg) {
-  messages.value.push({
-    role: 'assistant',
-    content: msg,
-    timestamp: Date.now()
-  })
+  messages.value.push(buildRenderedMessage('assistant', msg))
 }
 
 function formatSendError(e) {
   return '抱歉，发生错误：' + (e.message || '未知错误')
+}
+
+/**
+ * 中断当前大模型请求，并立即结束前端「正在生成」态。
+ * 页面层只负责用户交互状态，网络中断由 api/chat.js 统一处理。
+ */
+function stopGenerating() {
+  // 先通知后端设置 stop 标记，再中断前端流读取，双向确保尽快停。
+  if (sessionId.value) {
+    stopChatSession(sessionId.value).catch((e) => {
+      console.error('通知后端中断失败:', e)
+    })
+  }
+  abortChatRequest()
+  isTyping.value = false
+}
+
+function stopGeneratingForPageUnload() {
+  // 页面刷新/关闭时用 keepalive 兜底通知后端停止当前会话。
+  if (sessionId.value) stopChatSessionKeepalive(sessionId.value)
+  abortChatRequest()
 }
 
 /**
@@ -246,12 +310,31 @@ function formatSendError(e) {
 function createStreamDirectWriter() {
   let aiIndex = -1
   let scrollRafId = null
+  let appendRafId = null
+  let renderTimerId = null
+  let pendingChunkText = ''
+  const STREAM_MARKDOWN_RENDER_INTERVAL_MS = 120
 
   const scheduleScrollToBottom = () => {
     if (scrollRafId != null) return
     scrollRafId = requestAnimationFrame(() => {
       scrollRafId = null
-      void nextTick(() => scrollToBottom())
+        void nextTick(() => scrollToBottom(false))
+    })
+  }
+
+  // chunk 到达可能远高于浏览器渲染帧率；按帧合并可减少响应式抖动并让滚动更平滑。
+  const scheduleAppendChunksByFrame = () => {
+    if (appendRafId != null) return
+    appendRafId = requestAnimationFrame(() => {
+      appendRafId = null
+      if (!pendingChunkText) return
+      ensureRow()
+      const row = messages.value[aiIndex]
+      row.content += pendingChunkText
+      pendingChunkText = ''
+      scheduleStreamingMarkdownRender()
+      scheduleScrollToBottom()
     })
   }
 
@@ -259,26 +342,43 @@ function createStreamDirectWriter() {
     if (aiIndex >= 0) return
     isTyping.value = false
     messages.value.push({
-      role: 'assistant',
-      content: '',
-      timestamp: Date.now(),
+      ...buildRenderedMessage('assistant', ''),
+      streamingHtml: '',
       streaming: true
     })
     aiIndex = messages.value.length - 1
+  }
+
+  // 流式内容到达频率可能非常高，Markdown 全量解析改为小间隔节流，降低主线程压力。
+  const scheduleStreamingMarkdownRender = () => {
+    if (renderTimerId != null) return
+    renderTimerId = window.setTimeout(() => {
+      renderTimerId = null
+      if (aiIndex < 0) return
+      const row = messages.value[aiIndex]
+      row.streamingHtml = renderMessage(row.content || '')
+    }, STREAM_MARKDOWN_RENDER_INTERVAL_MS)
   }
 
   return {
     /** 网络层解析出的正文增量，直接追加 */
     push(text) {
       if (!text) return
-      ensureRow()
-      const row = messages.value[aiIndex]
-      row.content += text
-      scheduleScrollToBottom()
+      pendingChunkText += text
+      scheduleAppendChunksByFrame()
     },
     /** 出错：关 streaming，无正文则移除空气泡 */
     abortForError() {
       isTyping.value = false
+      pendingChunkText = ''
+      if (appendRafId != null) {
+        cancelAnimationFrame(appendRafId)
+        appendRafId = null
+      }
+      if (renderTimerId != null) {
+        clearTimeout(renderTimerId)
+        renderTimerId = null
+      }
       if (scrollRafId != null) {
         cancelAnimationFrame(scrollRafId)
         scrollRafId = null
@@ -291,17 +391,29 @@ function createStreamDirectWriter() {
     },
     /** 正常收尾：关 streaming，若界面仍空则用完整串兜底 */
     finalize(full) {
+      if (appendRafId != null) {
+        cancelAnimationFrame(appendRafId)
+        appendRafId = null
+      }
+      if (pendingChunkText) {
+        ensureRow()
+        const row = messages.value[aiIndex]
+        row.content += pendingChunkText
+        pendingChunkText = ''
+      }
+      if (renderTimerId != null) {
+        clearTimeout(renderTimerId)
+        renderTimerId = null
+      }
       if (aiIndex < 0) {
         isTyping.value = false
-        messages.value.push({
-          role: 'assistant',
-          content: full || '',
-          timestamp: Date.now()
-        })
+        messages.value.push(buildRenderedMessage('assistant', full || ''))
         return
       }
       const row = messages.value[aiIndex]
       if (!String(row.content || '').trim() && full) row.content = full
+      row.streamingHtml = renderMessage(row.content || '')
+      row.html = row.streamingHtml
       row.streaming = false
     }
   }
@@ -319,13 +431,10 @@ const sendMessagePlain = async () => {
       userId.value
     )
     isTyping.value = false
-    messages.value.push({
-      role: 'assistant',
-      content: reply,
-      timestamp: Date.now()
-    })
+    messages.value.push(buildRenderedMessage('assistant', reply))
   } catch (e) {
     console.error(e)
+    if (isAbortRequestError(e)) return
     isTyping.value = false
     pushErrorAssistant(formatSendError(e))
   } finally {
@@ -350,6 +459,7 @@ const sendMessageStream = async () => {
     writer.finalize(full)
   } catch (e) {
     console.error(e)
+    if (isAbortRequestError(e)) return
     writer.abortForError()
     pushErrorAssistant(formatSendError(e))
   } finally {
@@ -360,6 +470,19 @@ const sendMessageStream = async () => {
 const sendMessage = async () => {
   if (replyMode.value === 'plain') await sendMessagePlain()
   else await sendMessageStream()
+}
+
+/**
+ * 发送与停止共用按钮：
+ * - 空闲时：发送消息
+ * - 生成中：中断请求
+ */
+const handleSendOrStop = async () => {
+  if (isTyping.value) {
+    stopGenerating()
+    return
+  }
+  await sendMessage()
 }
 
 // 开始新对话
@@ -375,7 +498,7 @@ const startNewChat = () => {
     if (existing) {
       // 当前会话已在侧边栏：只更新内容与 session，避免重复插入
       existing.title = title
-      existing.messages = [...messages.value]
+      existing.messages = normalizeMessagesForRender(messages.value)
       if (sessionId.value) {
         existing.sessionId = sessionId.value
       }
@@ -385,7 +508,7 @@ const startNewChat = () => {
         id: Date.now(),
         sessionId: sessionId.value,
         title,
-        messages: [...messages.value]
+        messages: normalizeMessagesForRender(messages.value)
       })
     }
     saveChatHistory()
@@ -400,7 +523,7 @@ const switchChat = (chatId) => {
   const chat = chatHistory.value.find(c => c.id === chatId)
   if (chat) {
     currentChatId.value = chatId
-    messages.value = [...chat.messages]
+    messages.value = normalizeMessagesForRender(chat.messages)
     sessionId.value = chat.sessionId || crypto.randomUUID()
     if (!chat.sessionId) {
       chat.sessionId = sessionId.value
@@ -435,7 +558,16 @@ const clearAllHistory = () => {
 // 保存聊天历史到本地存储
 const saveChatHistory = () => {
   try {
-    localStorage.setItem('chatHistory', JSON.stringify(chatHistory.value))
+    // 本地只存业务字段，剔除 html 等渲染缓存，减少存储体积并避免脏状态持久化。
+    const persistedHistory = chatHistory.value.map((chat) => ({
+      ...chat,
+      messages: (chat.messages || []).map((message) => ({
+        role: message.role,
+        content: message.content,
+        timestamp: message.timestamp
+      }))
+    }))
+    localStorage.setItem('chatHistory', JSON.stringify(persistedHistory))
   } catch (e) {
     console.error('保存聊天历史失败:', e)
   }
@@ -446,7 +578,11 @@ const loadChatHistory = () => {
   try {
     const saved = localStorage.getItem('chatHistory')
     if (saved) {
-      chatHistory.value = JSON.parse(saved)
+      const parsedHistory = JSON.parse(saved)
+      chatHistory.value = (parsedHistory || []).map((chat) => ({
+        ...chat,
+        messages: normalizeMessagesForRender(chat.messages)
+      }))
     }
   } catch (e) {
     console.error('加载聊天历史失败:', e)
@@ -458,6 +594,18 @@ onMounted(() => {
   loadChatHistory()
   inputRef.value?.focus()
   nextTick(() => adjustInputHeight())
+  messagesContainer.value?.addEventListener('scroll', updateAutoScrollStateByUserPosition, {
+    passive: true
+  })
+  // 刷新、关闭页签或浏览器回收页面时都触发，尽量让后端立即停止旧请求。
+  window.addEventListener('beforeunload', stopGeneratingForPageUnload)
+  window.addEventListener('pagehide', stopGeneratingForPageUnload)
+})
+
+onUnmounted(() => {
+  messagesContainer.value?.removeEventListener('scroll', updateAutoScrollStateByUserPosition)
+  window.removeEventListener('beforeunload', stopGeneratingForPageUnload)
+  window.removeEventListener('pagehide', stopGeneratingForPageUnload)
 })
 
 // 配置 marked

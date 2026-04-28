@@ -32,3 +32,18 @@ class UserProfile(BaseModel):
             token = value.strip()
             return [token] if token else []
         return value
+
+    @field_validator("consumption_level", mode="before")
+    @classmethod
+    def coerce_consumption_level_to_str(cls, value: Any) -> Any:
+        # LLM 偶发把该字段输出成 []；这里统一把空值转 None，非空列表取首项，避免校验异常中断主流程。
+        if value in (None, "", [], {}):
+            return None
+        if isinstance(value, list):
+            first_item = value[0] if value else ""
+            normalized = str(first_item).strip()
+            return normalized or None
+        if isinstance(value, str):
+            normalized = value.strip()
+            return normalized or None
+        return str(value).strip() or None

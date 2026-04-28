@@ -7,11 +7,10 @@ def rag_node(state):
     """
     query = state["query"]
     docs = retrieve_travel_docs(query, top_k=6)
-    if not docs:
-        return {
-            **state,
-            "rag_context": "旅游缓存未命中有效素材，将由工具节点继续按用户问题尝试生成攻略。",
-        }
+    return {
+        **state,
+        "rag_context": docs,
+    }
 
     lines = []
     # 这里保持摘要紧凑，避免把超长正文直接塞进上下文导致响应变慢。
@@ -22,10 +21,9 @@ def rag_node(state):
         spots = str(metadata.get("spots_text") or "").strip()
         foods = str(metadata.get("foods_text") or "").strip()
         summary = str(metadata.get("raw_summary") or "").strip()
-        summary_short = summary[:120] + ("..." if len(summary) > 120 else "")
         lines.append(
             f"- 结果{index} | 城市={city or '未知'} | 标题={title} | 景点={spots or '暂无'} | "
-            f"美食={foods or '暂无'} | 摘要={summary_short or '暂无'}"
+            f"美食={foods or '暂无'} | 摘要={summary or '暂无'}"
         )
 
     rag_travel_context = "旅游缓存检索摘要：\n" + "\n".join(lines)

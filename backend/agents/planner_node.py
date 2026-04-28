@@ -9,7 +9,7 @@ def planner_node(state):
     # 旅游意图做显式规则短路：保证「旅游攻略」稳定进入 rag_travel -> search_travel 的固定链路。
 
     prompt = f"""你是任务路由器。仅根据用户当前这句话判断是否需要以下能力：
-        1) need_rag: 明确是旅游攻略/路线规划/景点美食推荐类问题，返回 true
+        1) need_rag: 明确是旅游攻略问题，返回 true
         2) need_tool: 需要外部工具/API/实时数据/执行动作；包括联网搜索(web_search)；
         3) need_memory: 需要读取或写入用户长期记忆
 

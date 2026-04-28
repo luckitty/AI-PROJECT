@@ -12,6 +12,58 @@ const apiClient = axios.create({
   }
 })
 
+// 当前会话中的大模型请求控制器（同一时刻只允许一个进行中请求）
+let activeChatAbortController = null
+
+/**
+ * 创建新的中断控制器，并替换旧的进行中请求控制器。
+ * 这样页面点击「停止生成」时可以统一中断当前大模型请求（plain/stream 共用）。
+ */
+function createChatAbortController() {
+  activeChatAbortController = new AbortController()
+  return activeChatAbortController
+}
+
+/**
+ * 主动中断当前大模型请求。
+ * 若当前没有进行中的请求，则静默返回。
+ */
+export function abortChatRequest() {
+  if (activeChatAbortController) {
+    activeChatAbortController.abort()
+    activeChatAbortController = null
+  }
+}
+
+/**
+ * 通知后端中断指定会话。
+ * 仅中断服务端当前会话，不影响本地历史。
+ */
+export async function stopChatSession(sessionId) {
+  if (!sessionId) return
+  await apiClient.get('/api/chat/stop', {
+    params: { session_id: sessionId }
+  })
+}
+
+/**
+ * 页面卸载阶段使用 keepalive 异步通知后端中断会话。
+ * 刷新/关闭标签页时无法可靠等待 Promise，这里走 fire-and-forget。
+ */
+export function stopChatSessionKeepalive(sessionId) {
+  if (!sessionId) return
+  const url = `${API_BASE_URL}/api/chat/stop?session_id=${encodeURIComponent(sessionId)}`
+  fetch(url, { method: 'GET', keepalive: true }).catch(() => {})
+}
+
+/**
+ * 判断错误是否由前端主动中断触发。
+ * fetch 会抛 AbortError；axios 在 signal 中断时 code 常为 ERR_CANCELED。
+ */
+export function isAbortRequestError(error) {
+  return error?.name === 'AbortError' || error?.code === 'ERR_CANCELED'
+}
+
 // 请求拦截器
 apiClient.interceptors.request.use(
   (config) => {
@@ -43,16 +95,21 @@ apiClient.interceptors.response.use(
  * 页面上的「三个点」加载态由 ChatInterface.vue 在 await 本函数前后控制 isTyping。
  */
 export const sendChatMessage = async (message, model = 'deepseek-chat', sessionId, userId) => {
+  const controller = createChatAbortController()
   try {
     const response = await apiClient.post('/api/chat', {
       message,
       model,
       session_id: sessionId,
       user_id: userId || undefined
+    }, {
+      signal: controller.signal
     })
     return response.reply || response.content || response.message || '未收到有效回复'
   } catch (error) {
     throw error
+  } finally {
+    if (activeChatAbortController === controller) activeChatAbortController = null
   }
 }
 
@@ -82,6 +139,18 @@ function parseSseDataPayload(raw) {
 }
 
 /**
+ * 解析单行 SSE 事件，兼容 "data: xxx" 与 "data:xxx" 两种写法。
+ * 返回 null 表示该行不是 data 事件或无正文。
+ */
+function parseSseDataLine(line) {
+  const normalized = String(line || '').trim()
+  if (!normalized.startsWith('data:')) return null
+  const raw = normalized.slice(5).trimStart().trimEnd()
+  if (!raw || raw === '[DONE]') return ''
+  return parseSseDataPayload(raw)
+}
+
+/**
  * 流式请求 POST /api/chat/stream（SSE）。
  * 首包到达前的「三个点」由 ChatInterface.vue 在首次 onChunk 之前保持 isTyping；
  * 每解析出一小段正文会调 onChunk，由页面直接拼进助手气泡（与常见 ChatGPT 类流式一致）。
@@ -93,6 +162,7 @@ export const sendChatMessageStream = async (
   userId,
   onChunk,
 ) => {
+  const controller = createChatAbortController()
   try {
     const response = await fetch(`${API_BASE_URL}/api/chat/stream`, {
       method: 'POST',
@@ -104,7 +174,8 @@ export const sendChatMessageStream = async (
         model,
         session_id: sessionId || undefined,
         user_id: userId || undefined
-      })
+      }),
+      signal: controller.signal
     })
 
     if (!response.ok) {
@@ -126,17 +197,19 @@ export const sendChatMessageStream = async (
       // 最后一项可能是半行，留到下一轮
       sseBuffer = lines.pop() ?? ''
       for (const line of lines) {
-        // SSE 标准：有效载荷行以 "data: " 开头
-        if (!line.startsWith('data: ')) continue
-        const raw = line.slice(6).trimEnd()
-        // 后端结束标记，没有正文
-        if (raw === '[DONE]') continue
-
-        const piece = parseSseDataPayload(raw)
+        const piece = parseSseDataLine(line)
         if (piece) {
           fullResponse += piece
           // 交给页面直接追加到助手气泡（流式展示）
           if (typeof onChunk === 'function') onChunk(piece)
+        }
+      }
+      // 结束时把缓冲区最后一行也尝试解析，避免无换行尾包被漏掉或延后到下一次请求。
+      if (done && sseBuffer) {
+        const tailPiece = parseSseDataLine(sseBuffer)
+        if (tailPiece) {
+          fullResponse += tailPiece
+          if (typeof onChunk === 'function') onChunk(tailPiece)
         }
       }
       if (done) break
@@ -146,6 +219,8 @@ export const sendChatMessageStream = async (
   } catch (error) {
     console.error('流式请求错误:', error)
     throw error
+  } finally {
+    if (activeChatAbortController === controller) activeChatAbortController = null
   }
 }
 
