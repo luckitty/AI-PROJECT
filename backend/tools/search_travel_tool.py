@@ -3,18 +3,10 @@
 检索逻辑见 rag/travel_cache_retriever.py。
 """
 import json
+import time
 from typing import List
 
-from langchain.tools import tool
-
-from rag.travel_cache_retriever import retrieve_travel_docs
-from tools.travel_itinerary_builder import (
-    build_itinerary_format_instruction,
-    build_llm_itinerary_bundle,
-)
-
-# 普通旅游问题需要足够的素材覆盖景点集合；4 条容易漏掉城市核心景点。
-TOP_K_NOTES = 10
+from tools.travel_itinerary_builder import build_llm_itinerary_bundle
 
 # 用于从正文/OCR 里截取「和吃喝更相关」的一小段，供美食类紧凑摘要使用（非穷举，覆盖常见口语）。
 FOOD_SNIPPET_HINTS = (
@@ -38,6 +30,11 @@ FOOD_SNIPPET_HINTS = (
     "豆汁",
     "米其林",
 )
+
+# 单条笔记写入攻略 prompt 的长度上限：过长会拉高输入 token 与 get_docs 侧处理成本。
+NOTE_DESC_MAX_CHARS = 1400
+NOTE_OCR_MAX_CHARS = 600
+
 
 def pick_food_related_snippet(desc: str, ocr_text: str, max_len: int = 220) -> str:
     """
@@ -72,12 +69,16 @@ def build_note_block(note: dict) -> str:
     title = (note.get("title") or "").strip() or "(无标题)"
     # url = (note.get("note_url") or "").strip()
     desc = (note.get("desc") or "").strip()
+    if len(desc) > NOTE_DESC_MAX_CHARS:
+        desc = desc[:NOTE_DESC_MAX_CHARS] + "..."
 
     parts = [f"【标题】{title}"]
     # if url:
     #     parts.append(f"【链接】{url}")
 
     prebuilt_ocr_text = (note.get("ocr_text") or "").strip()
+    if len(prebuilt_ocr_text) > NOTE_OCR_MAX_CHARS:
+        prebuilt_ocr_text = prebuilt_ocr_text[:NOTE_OCR_MAX_CHARS] + "..."
     ocr_chunks: List[str] = [prebuilt_ocr_text] if prebuilt_ocr_text else []
     # 按用户要求融合素材：
     # - OCR 成功：desc + OCR 合并，给模型更多可用事实
@@ -94,14 +95,10 @@ def build_note_block(note: dict) -> str:
     return "\n\n".join(parts)
 
 
-def build_travel_material(query: str, docs) -> str:
+def build_travel_body_material(docs) -> str:
     """
-    统一组装“结构约束+风格建议+素材明细”，作为旅游路线生成唯一输入，
-    让结构规则与文风建议分层，避免多处拼接导致约束漂移。
+    组装检索素材正文（笔记 desc + OCR 等），不含指令；行程规则全部由 travel_itinerary_builder 内唯一指令承担。
     """
-    # 构建行程格式要求 规则
-    format_instruction = build_itinerary_format_instruction(query)
-    # 单次遍历构建素材明细，避免重复遍历 docs。
     blocks: List[str] = []
     for rank, doc in enumerate(docs, start=1):
         metadata = doc.metadata or {}
@@ -119,36 +116,52 @@ def build_travel_material(query: str, docs) -> str:
 
         blocks.append(f"========== 结果 {rank}（相似度排序） ==========\n{note_block}")
 
-    return (
-        format_instruction
-        + "\n\n【风格建议】\n"
-        "- 优先使用下面的事实信息，不够再做合理补充，但不要偏离用户问题。\n"
-        "- 语言可以稍微幽默风趣一点，不要过于正式。\n"
-        "- 回答时可以适当使用表情或图标，提升可读性。\n"
-        "- 表达形式可以多元化，但不要破坏上方结构约束。\n\n"
-        + "【素材明细（优先使用）】\n"
-        + "\n\n".join(blocks)
+    return "【素材明细】\n" + "\n\n".join(blocks)
+
+
+def compose_travel_tool_payload(query: str, docs: list, stream_writer=None) -> dict:
+    """
+    旅游工具出口：攻略仅在一次 LLM 调用中生成（见 build_llm_itinerary_bundle），
+    此处只序列化正文与流式标记，供 response 节点拼最终 state，不再触发第二遍模型。
+    """
+    material_started_at = time.perf_counter()
+    body_material = build_travel_body_material(docs)
+    material_seconds = time.perf_counter() - material_started_at
+    bundle_started_at = time.perf_counter()
+    itinerary_bundle = build_llm_itinerary_bundle(
+        query, body_material, stream_writer=stream_writer
     )
+    bundle_seconds = time.perf_counter() - bundle_started_at
+    print(
+        "pipeline_timing===========compose_travel_tool_payload "
+        f"组装素材耗时: {material_seconds:.2f}s 攻略bundle(含LLM): {bundle_seconds:.2f}s"
+    )
+    visible_text = str(itinerary_bundle.get("visible_answer") or "").strip()
+    # 流式接口下 travel 节点已把正文增量推到 SSE；response 在未流式时补推全文。
+    visible_guide_streamed = stream_writer is not None and bool(visible_text)
+    return {
+        "visible_answer_draft": visible_text,
+        "visible_guide_streamed": visible_guide_streamed,
+    }
 
 
-@tool
-def search_travel(query: str, rag_context: str) -> str:
-    """旅游行程专用工具：从本地 data/cache 语义检索笔记，组装规则与素材供最终流式回答使用。"""
-    docs = rag_context
+def search_travel(query: str, rag_context: list, stream_writer=None) -> str:
+    """
+    旅游行程专用入口：接收 rag 文档列表，拼接检索素材并单次大模型流式/非流式生成攻略正文。
+    说明：仅由 LangGraph 的 travel 节点直接调用；LangChain 的 StructuredTool.invoke 第二个参数是 RunnableConfig，
+    若误写成 invoke(query, docs) 会把文档列表当成 config 解析，触发 AttributeError，表现为流式接口长时间无输出或报错。
+    """
+    docs = rag_context or []
     print("search_travel 命中文档数:", len(docs))
 
-    travel_material = build_travel_material(query, docs)
-    # 单次调用大模型同时生成两份结果：
-    # - visible_answer：给用户看的攻略草稿
-    # - itinerary_structured：给高德路线补交通用的隐藏结构
-    itinerary_bundle = build_llm_itinerary_bundle(docs, query)
-    skeleton_json = str(itinerary_bundle.get("itinerary_structured") or "").strip()
-    visible_answer_draft = str(itinerary_bundle.get("visible_answer") or "").strip()
-    print("search_travel===========skeleton_json \n", skeleton_json, "\n")
-    travel_output_payload = {
-        "itinerary_structured": skeleton_json,
-        "visible_answer_draft": visible_answer_draft,
-        # 给 response_node 的最终旅游攻略素材：规则 + RAG 摘要 + 素材明细。
-        "response_material": travel_material,
-    }
+    search_started_at = time.perf_counter()
+    travel_output_payload = compose_travel_tool_payload(query, docs, stream_writer)
+    search_seconds = time.perf_counter() - search_started_at
+    print(f"pipeline_timing===========search_travel 整段耗时: {search_seconds:.2f}s")
+    draft = str(travel_output_payload.get("visible_answer_draft") or "")
+    print(
+        "search_travel===========visible_draft_len \n",
+        len(draft),
+        "\n",
+    )
     return json.dumps(travel_output_payload, ensure_ascii=False)

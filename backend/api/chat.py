@@ -28,9 +28,15 @@ agent_graph = AgentOrchestrator()
 def sse_payload_from_custom_stream_chunk(chunk: Any) -> str:
     """
     解析 LangGraph ``stream_mode="custom"`` 的单次产出。
-    response 节点通过 ``get_stream_writer`` 写入 ``{"content": "增量"}``，此处取出正文增量给 SSE。
+    response / travel 节点通过 ``get_stream_writer`` 写入 ``{"content": "增量"}``，此处取出正文增量给 SSE。
+    兼容部分版本以 ``("custom", payload)`` 元组形式吐出的情况。
     """
     if chunk is None:
+        return ""
+    if isinstance(chunk, tuple) and len(chunk) >= 2:
+        payload = chunk[-1]
+        if isinstance(payload, dict):
+            return str(payload.get("content") or payload.get("message") or "")
         return ""
     if isinstance(chunk, dict):
         return str(chunk.get("content") or chunk.get("message") or "")

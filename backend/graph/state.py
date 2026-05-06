@@ -1,4 +1,4 @@
-from typing import TypedDict, Optional
+from typing import TypedDict, Optional, Any, List
 
 class AgentState(TypedDict):
     query: str
@@ -10,7 +10,11 @@ class AgentState(TypedDict):
     need_tool: bool
     need_memory: bool
 
-    rag_context: Optional[str]
+    # True 表示当前请求走 SSE stream，travel 节点可把攻略正文推到 custom；invoke 短路时为 False。
+    stream_sink_active: bool
+
+    # rag 节点写入 Document 列表；此前误标成 str 易误导调用方。
+    rag_context: Optional[List[Any]]
     travel_context: Optional[str]
     tool_result: Optional[str]
     memory_context: Optional[str]
@@ -24,6 +28,7 @@ def build_initial_state(
     user_id: str,
     session_id: str,
     system_prompt: str,
+    stream_sink_active: bool = False,
 ) -> AgentState:
     """
     LangGraph invoke 的完整初始状态；planner 会覆盖 need_*，各子节点再填上下文。
@@ -38,7 +43,9 @@ def build_initial_state(
         "need_rag": False,
         "need_tool": False,
         "need_memory": False,
-        
+
+        "stream_sink_active": stream_sink_active,
+
         "rag_context": None,
         "travel_context": None,
         "tool_result": None,

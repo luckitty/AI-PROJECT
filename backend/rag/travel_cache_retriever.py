@@ -4,6 +4,7 @@
 """
 import hashlib
 import json
+import time
 from pathlib import Path
 from typing import Any, List, Optional, Tuple
 
@@ -187,6 +188,7 @@ def ensure_travel_vectorstore_by_city(city_name: Optional[str]):
     根据城市构建并缓存旅游笔记向量库。
     命中城市时只向量化该城市文件；未命中时回退到全量。
     """
+    span_started_at = time.perf_counter()
     cache_key = build_cache_key(city_name)
     current_signature = cache_signature_for_city(city_name)
     cached_signature = cached_signatures.get(cache_key)
@@ -194,13 +196,25 @@ def ensure_travel_vectorstore_by_city(city_name: Optional[str]):
     cached_vectorstore = cached_vectorstores.get(cache_key)
     # 签名一致时直接复用缓存（即使向量库为 None，也能避免每次都重复扫盘加载空数据）。
     if cached_docs is not None and cached_signature == current_signature:
+        print(
+            "travel_rag_timing===========ensure_vectorstore_by_city 进程内缓存命中 "
+            f"city={city_name!r} key={cache_key} docs={len(cached_docs)} "
+            f"耗时={time.perf_counter() - span_started_at:.3f}s"
+        )
         return cached_docs, cached_vectorstore
 
+    load_docs_started_at = time.perf_counter()
     docs = get_docs(str(BACKEND_ROOT / "data"), source_type="travel_cache", city_name=city_name)
+    load_docs_seconds = time.perf_counter() - load_docs_started_at
     if not docs:
         cached_signatures[cache_key] = current_signature
         cached_docs_by_key[cache_key] = []
         cached_vectorstores[cache_key] = None
+        print(
+            "travel_rag_timing===========ensure_vectorstore_by_city 无笔记可索引 "
+            f"city={city_name!r} key={cache_key} get_docs={load_docs_seconds:.2f}s "
+            f"总耗时={time.perf_counter() - span_started_at:.2f}s"
+        )
         return cached_docs_by_key[cache_key], cached_vectorstores[cache_key]
 
     target_collection_name = collection_name_for_key(cache_key)
@@ -208,6 +222,7 @@ def ensure_travel_vectorstore_by_city(city_name: Optional[str]):
     persisted_sig = load_persisted_travel_signature(cache_key)
     if persisted_sig == current_signature and milvus_has_collection_sync(target_collection_name):
         try:
+            reuse_started_at = time.perf_counter()
             embedding = get_embeddings()
             vectorstore = Milvus(
                 embedding_function=embedding,
@@ -217,14 +232,25 @@ def ensure_travel_vectorstore_by_city(city_name: Optional[str]):
             cached_signatures[cache_key] = current_signature
             cached_docs_by_key[cache_key] = docs
             cached_vectorstores[cache_key] = vectorstore
+            reuse_seconds = time.perf_counter() - reuse_started_at
+            print(
+                "travel_rag_timing===========ensure_vectorstore_by_city Milvus复用仅连接 "
+                f"city={city_name!r} key={cache_key} collection={target_collection_name} "
+                f"docs={len(docs)} get_docs={load_docs_seconds:.2f}s 连接与封装={reuse_seconds:.2f}s "
+                f"总耗时={time.perf_counter() - span_started_at:.2f}s"
+            )
             return cached_docs_by_key[cache_key], cached_vectorstores[cache_key]
         except Exception:
             # 复用失败（版本/字段不一致等）时回退到下方全量重建，避免 search_travel 整条链路抛错无响应。
-            pass
+            print(
+                "travel_rag_timing===========ensure_vectorstore_by_city Milvus复用失败将全量重建 "
+                f"city={city_name!r} key={cache_key}"
+            )
 
     # 旅游域使用独立 Milvus collection，避免覆盖主知识库 collection。
     # 同时每个城市 key 使用独立 collection，避免切换城市时互相 drop_old。
     # 智谱 embedding 接口单次最多 64 条，这里显式分批入库，避免 from_documents 一次性提交超限。
+    embed_span_started_at = time.perf_counter()
     embedding = get_embeddings()
     texts = [doc.page_content for doc in docs]
     metadatas = [doc.metadata for doc in docs]
@@ -252,6 +278,13 @@ def ensure_travel_vectorstore_by_city(city_name: Optional[str]):
     cached_signatures[cache_key] = current_signature
     cached_docs_by_key[cache_key] = docs
     cached_vectorstores[cache_key] = vectorstore
+    embed_span_seconds = time.perf_counter() - embed_span_started_at
+    print(
+        "travel_rag_timing===========ensure_vectorstore_by_city 全量重建嵌入入库 "
+        f"city={city_name!r} key={cache_key} collection={target_collection_name} "
+        f"docs={len(docs)} get_docs={load_docs_seconds:.2f}s 删库嵌入入库={embed_span_seconds:.2f}s "
+        f"总耗时={time.perf_counter() - span_started_at:.2f}s"
+    )
     return cached_docs_by_key[cache_key], cached_vectorstores[cache_key]
 
 
@@ -263,6 +296,10 @@ def ensure_travel_vectorstore(query: str):
     docs, vectorstore = ensure_travel_vectorstore_by_city(city_name)
     if docs and vectorstore is not None:
         return docs, vectorstore
+    print(
+        "travel_rag_timing===========ensure_travel_vectorstore 城市首跳无可用数据 "
+        f"city={city_name!r} 回退全量域(all)"
+    )
     return ensure_travel_vectorstore_by_city(None)
 
 
@@ -270,25 +307,43 @@ def retrieve_travel_docs(query: str, top_k: int = 4) -> List:
     """
     旅游缓存语义检索：先向量召回，再用结构化字段重排，返回 top_k 条。
     """
+    retrieve_started_at = time.perf_counter()
     docs, vectorstore = ensure_travel_vectorstore(query)
+    ensure_seconds = time.perf_counter() - retrieve_started_at
     if not docs or vectorstore is None:
+        print(
+            "travel_rag_timing===========retrieve_travel_docs 无向量库或空文档 "
+            f"ensure耗时={ensure_seconds:.2f}s 返回空列表"
+        )
         return []
     city_name = detect_city_from_query(query)
-    # 城市旅游问题需要足够覆盖面，否则候选景点会缺「颐和园/鸟巢/水立方」这类核心点。
+    # 城市问题适度抬高 top_k；10 条素材会让攻略 prompt 过长拖慢推理，改为与调用方 top_k 对齐上限 6。
     effective_top_k = min(top_k, len(docs))
     if city_name:
-        effective_top_k = min(max(top_k, 10), len(docs))
+        effective_top_k = min(max(top_k, 6), len(docs))
     initial_k = max(effective_top_k * 3, effective_top_k, 24)
     initial_k = min(initial_k, len(docs))
     print("initial_k===========initial_k \n", initial_k, "\n")
+    search_started_at = time.perf_counter()
     candidates = vectorstore.similarity_search(query, k=initial_k)
+    search_seconds = time.perf_counter() - search_started_at
 
-    return rerank_docs_by_structured_profile(
+    rerank_started_at = time.perf_counter()
+    ranked = rerank_docs_by_structured_profile(
         candidates,
         query,
         effective_top_k,
         city_name=city_name,
     )
+    rerank_seconds = time.perf_counter() - rerank_started_at
+    total_seconds = time.perf_counter() - retrieve_started_at
+    print(
+        "travel_rag_timing===========retrieve_travel_docs 分段 "
+        f"ensure_vectorstore={ensure_seconds:.2f}s similarity_search(k={initial_k})={search_seconds:.2f}s "
+        f"rerank={rerank_seconds:.2f}s 合计={total_seconds:.2f}s "
+        f"返回条数={len(ranked)} effective_top_k={effective_top_k}"
+    )
+    return ranked
 
 
 def infer_query_intent_fields(query: str) -> list[str]:

@@ -16,7 +16,9 @@ class AgentOrchestrator:
     ):
         # 传入 thread_id，确保 checkpointer 按 session 维度读写状态。
         result = self.graph.invoke(
-            build_initial_state(query, user_id, session_id, system_prompt),
+            build_initial_state(
+                query, user_id, session_id, system_prompt, stream_sink_active=False
+            ),
             config={"configurable": {"thread_id": session_id}},
         )
 
@@ -34,7 +36,9 @@ class AgentOrchestrator:
         # 使用 custom：由 response 节点内 get_stream_writer 显式写入增量，
         # 不依赖 LLM 回调链，避免「整段才出」或中间长时间无包（messages 模式在自定义节点里不稳定）。
         return self.graph.stream(
-            build_initial_state(query, user_id, session_id, system_prompt),
+            build_initial_state(
+                query, user_id, session_id, system_prompt, stream_sink_active=True
+            ),
             config={"configurable": {"thread_id": session_id}},
             stream_mode="custom",
         )

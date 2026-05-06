@@ -8,7 +8,6 @@ from agents.planner_node import planner_node
 from agents.memory_node import memory_node
 from agents.rag_node import rag_node
 from agents.travel_node import travel_node
-from agents.amap_node import amap_node
 from agents.tool_node import tool_node
 from agents.response_node import response_node
 from agents.save_memory_node import save_memory_node
@@ -55,7 +54,6 @@ def build_graph():
     graph.add_node("memory", memory_node)
     graph.add_node("rag", rag_node)
     graph.add_node("travel", travel_node)
-    graph.add_node("amap", amap_node)
     graph.add_node("tool", tool_node)
     graph.add_node("response", response_node)
     graph.add_node("save_memory", save_memory_node)
@@ -112,22 +110,22 @@ def build_graph():
         },
     )
 
-    # travel -> amap 间加闸门，保证编排阶段可立即停止。
+    # travel 结束后直接进入 capability 闸门，旅游正文不再经高德算路节点。
     connect_with_interrupt_gate(
         graph,
         ["travel"],
         "check_interrupt_after_travel",
-        lambda state: route_interrupt_or_node(state, "amap"),
+        lambda state: route_interrupt_or_node(state, "check_interrupt_after_capability"),
         {
             "interrupt": END,
-            "amap": "amap",
+            "check_interrupt_after_capability": "check_interrupt_after_capability",
         },
     )
 
     # 子能力节点结束后统一先检查 stop，再决定是否进入 response。
     connect_with_interrupt_gate(
         graph,
-        ["amap", "memory", "tool"],
+        ["memory", "tool"],
         "check_interrupt_after_capability",
         lambda state: route_interrupt_or_node(state, "response"),
         {
