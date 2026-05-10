@@ -1,6 +1,6 @@
 # travel-guide-agent（旅游攻略助手）
 
-基于 **FastAPI + Vue 3 + Vite** 的对话应用：前端为类 DeepSeek 的聊天界面；后端对话主路径为 **LangGraph 节点编排**（`planner` → `memory` / `rag` / `tool` → `response` → `save_memory`），底层模型走 **DeepSeek 兼容 OpenAI 接口**。支持 **短期会话检查点（Redis）**、**本地 RAG（Milvus + 混合检索 + 可选重排）** 与 **天气 / 演示股价 / 联网搜索** 等工具。
+基于 **FastAPI + Vue 3 + Vite** 的对话应用：前端为类 DeepSeek 的聊天界面；后端对话主路径为 **LangGraph** 编排——入口经人机闸门与对话压缩后进入 **`planner`**，按计划在 **`memory` / `rag` / `tool`** 与 **`response`** 之间流转，最后 **`save_memory`** 收口。底层对话模型走 **DeepSeek 兼容 OpenAI 接口**；RAG 嵌入可走 **智谱**；短期会话检查点使用 **Redis（需 Stack：RediSearch + RedisJSON）**；向量库默认 **Milvus**。
 
 ---
 
@@ -8,13 +8,14 @@
 
 | 能力 | 说明 |
 |------|------|
-| 对话 | 非流式 `POST /api/chat`、流式 `POST /api/chat/stream`（SSE，行内 `data: {"content":...}`，结束 `data: [DONE]`） |
-| 请求体 | `message`、`model`、`session_id`、`user_id`（可选，长期记忆等场景用） |
-| 编排 | `planner` 输出 `need_rag` / `need_tool` / `need_memory`，动态路由到对应节点后再汇总到 `response` |
-| 短期记忆 | LangGraph 使用 **RedisSaver** 检查点，按 `thread_id`（与前端 `session_id` 对齐）持久化；需 **Redis Stack**（含 RediSearch + RedisJSON） |
-| 工具 | `tool` 节点：`get_weather`（高德）、`get_stock_price`（演示数据）、`web_search` |
-| RAG | `rag` 节点：`data` 目录文档 → 嵌入（智谱）→ **Milvus** 向量库；BM25 + 向量混合检索，可选 CrossEncoder 精排（`USE_RERANKER`） |
-| 前端 | Markdown（marked + DOMPurify）、流式打字机、侧边栏会话、模型与非流式/流式切换 |
+| 对话 | 非流式 `POST /api/chat`；流式 `POST /api/chat/stream`（SSE：`data: {"content":...}` 或控制字段，结束 `data: [DONE]`） |
+| 请求体 | `message`、`model`、`session_id`、`user_id`（可选）；`resume`（恢复人机断点）；`human_breakpoints`（是否在 SSE 中透出 interrupt，默认服务端自动 resume） |
+| 编排 | `conversation_compress` → `planner` → 按需 `rag` / `memory` / `tool` → `response` → `save_memory`；各阶段可插入人机闸门（`interrupt()`） |
+| 旅游攻略 | `response` 节点在攻略场景下调用 **`search_travel`**，结合离线旅游缓存与行程拼装（见 `tools/search_travel_tool.py`、`rag/travel_cache_retriever.py`） |
+| 本地旅游 RAG | `planner` 仅在用户语句命中 **北京 / 广州 / 杭州 / 上海 / 西安 / 长沙** 之一时置 `need_rag`，其余攻略倾向由终稿路径处理（见 `agents/planner_node.py`） |
+| 工具 | `get_weather`（高德）、`web_search`、`amap_route`（起终点路线摘要）；注册表见 `tools/tool_registry.py` |
+| 会话控制 | `GET /api/chat/stop?session_id=` 配合前端 Abort；同用户新会话可打断旧会话（`interrupt_manager`） |
+| 前端 | Markdown（marked + DOMPurify）、流式输出、侧边栏会话、模型与非流式/流式切换；`VITE_API_BASE_URL` 指向后端 |
 
 ---
 
@@ -23,34 +24,33 @@
 ```
 travel-guide-agent/
 ├── backend/
-│   ├── main.py                    # FastAPI 入口（默认 :8000）
-│   ├── api/chat.py                # /api/chat、/stream、/history、/models
+│   ├── main.py                    # FastAPI 入口（默认 0.0.0.0:8000）
+│   ├── api/chat.py                # /api/chat、/stream、/stop、/history、/models
 │   ├── graph/
-│   │   ├── builder.py             # StateGraph：planner → … → response → save_memory
-│   │   ├── orchestrator.py        # AgentOrchestrator：invoke / stream
-│   │   ├── router.py              # route_by_plan
-│   │   └── state.py               # AgentState
-│   ├── agents/                    # planner、memory、rag、tool、response、save_memory
-│   ├── agents/assistant.py        # create_agent + 工具清单（与 ToolRegistry 对齐；图编排可与单 Agent 方案并存）
-│   ├── chains/chat_chain.py       # RunnableWithMessageHistory（内存历史清理等）
-│   ├── core/config.py             # API Key / 模型等（dotenv）
+│   │   ├── builder.py             # StateGraph：人机闸门 + compress + planner → … → save_memory
+│   │   ├── orchestrator.py        # AgentOrchestrator：invoke / stream（updates + custom）
+│   │   ├── router.py              # planner 出边路由
+│   │   ├── state.py               # AgentState
+│   │   └── interrupt.py           # 人机闸门节点
+│   ├── agents/                    # planner、memory、rag、tool、response、save_memory 等节点
+│   ├── core/config.py             # dotenv 加载 API Key / 模型名等
 │   ├── core/llm.py                # ChatOpenAI（DeepSeek）
 │   ├── memory/
-│   │   ├── short_memory.py        # RedisSaver 检查点
+│   │   ├── short_memory.py        # LangGraph RedisSaver 检查点
 │   │   ├── redis_config.py        # REDIS_URL、TTL
-│   │   └── long_memory*.py        # 长期记忆相关（按需启用）
-│   ├── rag/                       # 加载、混合检索、Milvus、重排
-│   ├── tools/                     # 天气、股票、联网搜索、ToolRegistry
-│   ├── data/                      # RAG 原始文本（按需增删后重建/写入 Milvus）
-│   └── requirements.txt           # 部分依赖声明（见下「安装」）
-├── frontend/
-│   ├── src/components/ChatInterface.vue
-│   ├── src/api/chat.js            # axios + fetch(SSE)，VITE_API_BASE_URL
-│   └── vite.config.js             # 开发端口 3000
+│   │   └── long_memory*.py        # 长期记忆（按需）
+│   ├── rag/                       # 加载、混合检索、Milvus、旅游离线缓存等
+│   ├── tools/                     # 天气、联网、高德路线、ToolRegistry、search_travel
+│   ├── data/                      # RAG 文本、城市缓存、POI 等数据文件
+│   ├── interruptController/       # 会话 stop / 用户活跃会话绑定
+│   └── requirements.txt           # 部分依赖声明（安装时按报错补全主栈）
+├── frontend/                      # Vue 3 + Vite（开发端口 3000）
+├── docker-compose.yml             # Milvus standalone（etcd + minio + milvus）
+├── start.sh / start.bat           # 根目录检查 .env 后拉起 backend + frontend
 └── README.md
 ```
 
-运行后端时工作目录一般为 **`backend/`**（`python main.py`）。RAG 向量存储当前默认走 **Milvus**（见 `rag/retriever.py`、`rag/vectorstores/milvus_client.py`）；Chroma 相关代码保留为可选切换。
+后端一般在 **`backend/`** 下执行 `python main.py`（或在外层用 `start.sh`）。Milvus 路径与集合逻辑见 `backend/rag/original/vectorstores/milvus_client.py`。
 
 ---
 
@@ -58,43 +58,50 @@ travel-guide-agent/
 
 - **Node.js** 建议 **18+**（Vite 5）
 - **Python** 建议 **3.11+**
-- **Redis**：需 **Redis Stack**（含 RediSearch、RedisJSON），供 LangGraph `RedisSaver` 建索引；URL 见 `backend/memory/redis_config.py`
-- **Milvus**：RAG 默认连本机或配置的 Milvus 服务（`MILVUS_HOST` / `MILVUS_PORT` 等）
-- 网络：需能访问 **DeepSeek API**；嵌入使用 **智谱** 时需能访问智谱 API；天气依赖 **高德** Key
+- **Redis Stack**（含 **RediSearch、RedisJSON**），供 LangGraph `RedisSaver`；连接默认见下方 `redis_config.py`
+- **Milvus**：RAG / 向量检索默认连接本机或配置的实例；仓库提供 **`docker-compose.yml`** 一键起 Milvus 依赖组件
+- 网络：需能访问 **DeepSeek API**；嵌入使用 **智谱** 时需可达智谱接口；天气与路线依赖 **高德 Key**
 
 ---
 
 ## 环境变量
 
-在项目根目录或 `backend/` 旁创建 **`.env`**，由 `python-dotenv` 加载（`backend/core/config.py`）。
+在项目根目录或运行目录旁放置 **`.env`**，由 `python-dotenv` 加载（`backend/core/config.py`）。
 
 | 变量 | 说明 |
 |------|------|
-| `DEEPSEEK_API_KEY` | 必填：对话模型 |
+| `DEEPSEEK_API_KEY` | 对话模型（必填） |
 | `DEEPSEEK_BASE_URL` | 可选，默认 `https://api.deepseek.com` |
 | `MODEL_NAME` | 可选，默认 `deepseek-chat` |
-| `ZHIPU_API_KEY` | RAG 向量嵌入（智谱 `embedding-3`）需要 |
-| `AMAP_KEY` | 天气工具（高德）需要 |
-| `USE_RERANKER` | 设为 `0` / `false` 等可关闭 CrossEncoder 精排，加快启动、省资源 |
+| `ZHIPU_API_KEY` | RAG 嵌入等需要时使用 |
+| `AMAP_KEY` | 天气、`amap_route` 需要 |
 | `LANGSMITH_API_KEY` / `LANGSMITH_TRACING` | 可选，LangSmith 追踪 |
+| `USE_RERANKER` | 设为 `0` / `false` / `no` 可关闭 CrossEncoder 精排（`rag/original/retriever.py` 等），加快启动、省资源 |
 
-**Milvus（RAG）**（见 `milvus_client.py`）：
+**Milvus**（`backend/rag/original/vectorstores/milvus_client.py`）：
 
 | 变量 | 说明 |
 |------|------|
 | `MILVUS_HOST` | 默认 `127.0.0.1` |
 | `MILVUS_PORT` | 默认 `19530` |
+| `MILVUS_TIMEOUT` | gRPC 超时（秒），默认 `60` |
 | `MILVUS_COLLECTION` | 集合名，默认 `rag_collection` |
-| `MILVUS_SKIP_INGEST` | 为 `1`/`true` 时跳过写入，仅连接已有集合 |
-| `MILVUS_DROP_OLD` | 为 `1`/`true` 时写入前删除旧集合数据（按实现语义使用） |
+| `MILVUS_SKIP_INGEST` | `1`/`true` 时跳过写入，仅连接已有集合 |
+| `MILVUS_DROP_OLD` | `1`/`true` 时 `from_documents` 侧按 LangChain Milvus 语义处理旧数据 |
 
-**Redis**：连接串在 `memory/redis_config.py` 中配置（默认 `redis://localhost:6380/0`）；若与本地端口不一致请改源码或自行对齐部署。
+**Redis**：在 `backend/memory/redis_config.py` 中配置 **`REDIS_URL`**（默认 `redis://localhost:6380/0`，示例端口 **6380** 以避免与本机其他 Redis 冲突）。
 
-前端可选：**`VITE_API_BASE_URL`**（默认 `http://localhost:8000`）。
+前端构建/开发：**`VITE_API_BASE_URL`**，默认 `http://localhost:8000`（见 `frontend/src/api/chat.js`）。
 
 ---
 
 ## 安装与运行
+
+### 依赖服务建议顺序
+
+1. 启动 **Redis Stack**（监听 URL 与 `redis_config.py` 一致）
+2. 启动 **Milvus**（可用仓库根目录 `docker-compose up -d`）
+3. 配置 **`.env`**（至少 `DEEPSEEK_API_KEY`，按需 `ZHIPU_API_KEY`、`AMAP_KEY`）
 
 ### 后端
 
@@ -103,15 +110,14 @@ cd backend
 python -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-# 若缺包，请按报错补装：fastapi、uvicorn、langchain、langchain-openai、langgraph、
+# 若缺包，按报错补装：fastapi、uvicorn、langchain、langchain-openai、langgraph、
 # langgraph-checkpoint-redis、langchain-community、langchain-milvus、pymilvus、
-# zhipuai、rank-bm25、jieba、sentence-transformers 等（以实际 import 为准）
+# zhipuai、python-dotenv 等（以实际 import 为准）
 python main.py
 ```
 
-服务默认：**http://127.0.0.1:8000**，交互文档：**http://127.0.0.1:8000/docs**。
-
-启动前请确保 **Redis Stack** 与 **Milvus**（若使用 RAG 写入）已就绪。
+- 服务默认：**http://127.0.0.1:8000**
+- OpenAPI：**http://127.0.0.1:8000/docs**
 
 ### 前端
 
@@ -121,14 +127,22 @@ npm install
 npm run dev
 ```
 
-开发服务器默认：**http://localhost:3000**（见 `vite.config.js`）。
+开发服务器默认：**http://localhost:3000**（`vite.config.js`）。
+
+### 一键脚本（根目录）
+
+```bash
+./start.sh
+```
+
+需先在根目录准备 **`.env`**（脚本会检查）。Windows 可使用 **`start.bat`**。
 
 ### 生产构建前端
 
 ```bash
 cd frontend
 npm run build
-# 产物在 frontend/dist；部署时将 API 指到后端（构建前设置 VITE_API_BASE_URL）
+# 产物在 frontend/dist；构建前设置 VITE_API_BASE_URL 指向生产后端
 ```
 
 ---
@@ -137,36 +151,38 @@ npm run build
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| `POST` | `/api/chat` | 非流式；请求体含 `message`、`model`、`session_id`、`user_id`（可选） |
-| `POST` | `/api/chat/stream` | SSE 流式；仅 **`response` 节点** 的助手正文进入 SSE，避免 planner 的 JSON 混入 |
-| `DELETE` | `/api/chat/history/{session_id}` | 清空 Runnable 链内存历史 + Agent 图检查点中该会话 |
-| `GET` | `/api/chat/models` | 返回前端可选模型列表 |
+| `POST` | `/api/chat` | 非流式；支持 `resume`、`human_breakpoints`；若挂起人机断点则 `status=interrupted` 且返回 `interrupts` |
+| `POST` | `/api/chat/stream` | SSE；首包可为 `{"typing": true}`；正文为 `{"content": "..."}`；`human_breakpoints=true` 时可下发 `{"type":"interrupt",...}` |
+| `GET` | `/api/chat/stop` | Query：`session_id` — 通知后端停止该会话生成 |
+| `DELETE` | `/api/chat/history/{session_id}` | 清空 Runnable 链历史与 Agent 检查点 |
+| `GET` | `/api/chat/models` | 前端可选模型列表 |
 
 ---
 
 ## 架构说明（简）
 
-1. **主路径**：`AgentOrchestrator` 编译 `build_graph()`，入口 `planner` 根据 JSON 计划路由到 `memory` / `rag` / `tool` 或直接 `response`，再经 `save_memory` 结束。
-2. **流式**：`stream_mode="messages"`，API 层通过 `langgraph_node == "response"` 过滤，只把最终回复推给前端。
-3. **检查点**：`get_short_term_checkpointer()` 使用 **RedisSaver**，会话与进程解耦；清空历史需同时调用链路与图上的清理逻辑（见 `chat.py`）。
-4. **RAG**：文档在 `backend/data/`，首次检索会 `ensure_rag()` 加载并写入 Milvus（除非 `MILVUS_SKIP_INGEST`）；混合检索与重排在 `rag/` 下。
-5. **`create_assistant`**：仍保留单 Agent + 工具调用实现，便于对比或切换；当前 HTTP 接口默认走 **图编排**。
+1. **图编译**：`build_graph()` 在 `compile` 时挂载 **`get_short_term_checkpointer()`**（Redis）。
+2. **流式**：`stream_mode=["updates", "custom"]`；`response`（等）通过 **`get_stream_writer`** 写入 `custom` 增量；API 层将增量封装为 SSE JSON。
+3. **人机协作**：图中多处 **`human_checkpoint_*`**；非流式可在服务端循环 `Command(resume=True)` 直到完成；流式默认自动 resume，次数上限见 **`MAX_HITL_RESUME_STEPS`**（`graph/orchestrator.py`）。
+4. **RAG 与攻略**：通用 RAG 节点与 **`travel_cache_retriever` / 离线缓存** 协同；攻略素材组装与行程指令见 **`tools/search_travel_tool.py`**、**`tools/travel_itinerary_builder.py`**。离线构建脚本位于 **`backend/tools/offlineTool/`**、**`backend/rag/offlineCache/`**。
+5. **`create_assistant`**（`agents/assistant.py`）：保留单 Agent + 工具实现；当前 HTTP 主路径以 **图编排 `AgentOrchestrator`** 为准（见 `api/chat.py`）。
 
 ---
 
-## RAG 与数据
+## 数据与离线构建
 
-- 将 `.txt` 等放入 **`backend/data/`**（具体扫描逻辑见 `rag/loader.py`）。
-- 首次构建或全量重建可能较慢（嵌入、Milvus 写入、可选重排模型下载）。
-- 根目录若存在 **`test_rag.py`** 等脚本，可用于独立验证检索链路（与主服务解耦）。
+- 文本与缓存数据多在 **`backend/data/`**（含城市 JSON、POI 缓存、Milvus 签名文件等）。
+- 新增或更新语料后，需按项目内脚本重建向量库或旅游缓存（具体入口以 `offlineTool`、`offlineCache` 下脚本为准）。
+- `requirements.txt` 中列有 **rapidocr-onnxruntime**、**playwright** 等，用于采集 / OCR 等离线链路，运行时按需安装。
 
 ---
 
 ## 注意事项
 
-1. 对话依赖 **DeepSeek API Key**；RAG 嵌入、天气分别依赖 **智谱**、**高德** Key，未配置时对应能力会失败或不可用。
-2. **Redis** 须为 Stack 能力集；纯 `redis` 官方镜像无搜索模块时，检查点 `setup()` 可能失败。
-3. CORS 当前为宽松配置（`allow_origins=["*"]`），生产环境请按域名收紧。
+1. **DeepSeek / 智谱 / 高德** Key 未配置时，对应能力会失败或降级，需在日志中排查。
+2. **Redis** 必须为 **Stack** 能力集；纯官方 `redis` 镜像无搜索模块时，检查点初始化可能失败。
+3. **CORS** 当前为宽松配置（`allow_origins=["*"]`），生产环境请按域名收紧。
+4. 路线工具 **`amap_route`** 需要用户在问题中可分辨的起点、终点与城市信息；复杂指代依赖多轮节选（见 `ToolRegistry.select_tool`）。
 
 ## License
 
