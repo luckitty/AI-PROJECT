@@ -1,12 +1,12 @@
 import os
 
 from langchain.tools import tool
-from rag.embedding import get_embeddings
-from rag.loader import get_docs
-from rag.hybrid_retriever import HybridRetriever
-from rag.reranker import NoOpReranker, Reranker
-# from rag.vectorstores.chroma_client import get_vectorstore
-from rag.vectorstores.milvus_client import get_vectorstore_milvus
+from rag.original.embedding import get_embeddings
+from rag.original.loader import get_docs
+from rag.original.hybrid_retriever import HybridRetriever
+from rag.original.reranker import NoOpReranker, Reranker
+# from rag.original.vectorstores.chroma_client import get_vectorstore
+from rag.original.vectorstores.milvus_client import get_vectorstore_milvus
 from datetime import datetime
 # 懒加载：避免 import assistant 时全量建库
 rag_ready = False

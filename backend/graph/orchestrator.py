@@ -1,5 +1,10 @@
+from langgraph.types import Command
+
 from graph.builder import build_graph
 from graph.state import build_initial_state
+
+# 人机断点很多时节点的 interrupt 次数上限，防止异常情况下死循环。
+MAX_HITL_RESUME_STEPS = 64
 
 
 class AgentOrchestrator:
@@ -13,18 +18,35 @@ class AgentOrchestrator:
         user_id: str,
         session_id: str = "",
         system_prompt: str = "",
+        resume=None,
+        human_breakpoints: bool = False,
     ):
-        # 传入 thread_id，确保 checkpointer 按 session 维度读写状态。
-        result = self.graph.invoke(
-            build_initial_state(
-                query, user_id, session_id, system_prompt, stream_sink_active=False
-            ),
-            config={"configurable": {"thread_id": session_id}},
-        )
-
-        # print("result===========result \n", result[:200], "\n")
-
-        return result.get("final_answer", "")
+        """
+        执行 ``invoke``。
+        - ``human_breakpoints=False``（默认）：遇 ``interrupt()`` 时在服务端自动 ``resume=True`` 直到跑完，兼容未改造的前端。
+        - ``human_breakpoints=True``：首次挂起即返回，由客户端传 ``resume`` 逐步恢复。
+        """
+        config = {"configurable": {"thread_id": session_id}}
+        if resume is not None:
+            result = self.graph.invoke(Command(resume=resume), config=config)
+        else:
+            result = self.graph.invoke(
+                build_initial_state(
+                    query, user_id, session_id, system_prompt, stream_sink_active=False
+                ),
+                config=config,
+            )
+        if human_breakpoints:
+            return result
+        steps = 0
+        while result.get("__interrupt__"):
+            steps += 1
+            if steps > MAX_HITL_RESUME_STEPS:
+                raise RuntimeError(
+                    "人机断点自动恢复次数超过上限，请检查图结构或启用 human_breakpoints 人工逐步 resume"
+                )
+            result = self.graph.invoke(Command(resume=True), config=config)
+        return result
 
     def stream(
         self,
@@ -32,13 +54,21 @@ class AgentOrchestrator:
         user_id: str,
         session_id: str = "",
         system_prompt: str = "",
+        resume=None,
     ):
-        # 使用 custom：由 response 节点内 get_stream_writer 显式写入增量，
-        # 不依赖 LLM 回调链，避免「整段才出」或中间长时间无包（messages 模式在自定义节点里不稳定）。
-        return self.graph.stream(
-            build_initial_state(
+        """
+        流式执行：``updates`` 用于透出 ``interrupt()``，``custom`` 用于正文增量。
+        产出为元组 ``(mode, payload)``（多模式 stream 的默认形态）。
+        """
+        config = {"configurable": {"thread_id": session_id}}
+        if resume is not None:
+            stream_input = Command(resume=resume)
+        else:
+            stream_input = build_initial_state(
                 query, user_id, session_id, system_prompt, stream_sink_active=True
-            ),
-            config={"configurable": {"thread_id": session_id}},
-            stream_mode="custom",
+            )
+        return self.graph.stream(
+            stream_input,
+            config=config,
+            stream_mode=["updates", "custom"],
         )

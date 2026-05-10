@@ -1,7 +1,7 @@
 import os
 from langchain_milvus import Milvus
 
-import backend.rag.vectorstores.milvus_langchain_compat  # noqa: F401
+import backend.rag.original.vectorstores.milvus_langchain_compat  # noqa: F401
 
 def milvus_connection_args():
     host = os.getenv("MILVUS_HOST", "127.0.0.1")

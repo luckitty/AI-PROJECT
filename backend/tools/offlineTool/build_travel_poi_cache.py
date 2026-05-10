@@ -7,8 +7,9 @@ from typing import Dict, List
 
 # 兼容从仓库根目录或 backend 目录直接执行脚本。
 current_file = Path(__file__).resolve()
-repo_root = current_file.parents[2]
-backend_root = current_file.parents[1]
+# 脚本位于 backend/tools/offlineTool，仓库根与 backend 各多一层目录
+repo_root = current_file.parents[3]
+backend_root = current_file.parents[2]
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 if str(backend_root) not in sys.path:

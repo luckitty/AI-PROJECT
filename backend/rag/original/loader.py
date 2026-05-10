@@ -3,7 +3,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_experimental.text_splitter import SemanticChunker
 import hashlib
 
-from rag.embedding import get_embeddings
+from rag.original.embedding import get_embeddings
 from rag.travel_loader import load_travel_cache_docs
 
 # 切分策略：True 用语义切分（多次 embed_documents，慢、有 API 费用，但边界更贴话题）；
@@ -82,7 +82,6 @@ def get_docs(data_path, embeddings=None, source_type="txt", city_name=None):
         docs = load_travel_cache_docs(
             data_path,
             city_name=city_name,
-            allow_runtime_ocr=False,
         )
     else:
         # embeddings 可选：由调用方（如 ensure_rag）传入时，语义切分与向量库共用同一嵌入客户端

@@ -1,146 +1,262 @@
 <template>
   <div class="chat-container">
-    <!-- 侧边栏 -->
-    <div class="sidebar" :class="{ 'collapsed': sidebarCollapsed }">
-      <div class="sidebar-header">
-        <div class="logo">
-          <span class="logo-icon"></span>
-          <span class="logo-text" v-show="!sidebarCollapsed">个性化推荐系统</span>
+    <!-- 侧栏：展开 / 收起、新对话、搜索、分组列表、行内删除、底栏用户菜单 -->
+    <aside class="sidebar" :class="{ collapsed: sidebarCollapsed }">
+      <div class="sidebar-toolbar">
+        <!--
+          对齐 ChatGPT：展开态为 Logo + 收起按钮；收起态顶栏仅保留 Logo，
+          悬停 Logo 区域再显示「展开侧栏」图标（半透明遮罩 + 图标），点击任意时刻均可展开。
+        -->
+        <div class="sidebar-brand-wrap" :class="{ 'is-collapsed-toolbar': sidebarCollapsed }">
+          <img class="sidebar-brand-logo" src="/app-logo.png" alt="旅游攻略助手" />
+          <button
+            v-if="sidebarCollapsed"
+            type="button"
+            class="sidebar-expand-from-logo"
+            title="展开侧栏"
+            aria-label="展开侧栏"
+            aria-expanded="false"
+            @click="toggleSidebar"
+          >
+            <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <rect x="4" y="4" width="6" height="16" rx="1.5" stroke-linejoin="round" />
+              <path d="M14 6h6M14 12h6M14 18h6" stroke-linecap="round" />
+            </svg>
+          </button>
         </div>
         <button
+          v-show="!sidebarCollapsed"
           type="button"
-          class="collapse-btn"
-          :title="sidebarCollapsed ? '展开侧栏' : '收起侧栏'"
-          :aria-expanded="!sidebarCollapsed"
+          class="sidebar-icon-btn sidebar-toggle"
+          title="收起侧栏"
+          :aria-expanded="true"
           @click="toggleSidebar"
         >
-          <span class="collapse-icon" aria-hidden="true">{{ sidebarCollapsed ? '›' : '‹' }}</span>
+          <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <rect x="4" y="4" width="6" height="16" rx="1.5" stroke-linejoin="round" />
+            <path d="M14 6h6M14 12h6M14 18h6" stroke-linecap="round" />
+          </svg>
         </button>
       </div>
 
-      <div class="new-chat-section">
+      <div class="sidebar-new-chat-wrap">
         <button
           type="button"
-          class="new-chat-btn"
+          class="sidebar-new-chat"
           :title="sidebarCollapsed ? '新对话' : undefined"
           @click="startNewChat"
         >
-          <span class="icon">+</span>
-          <span v-show="!sidebarCollapsed">新对话</span>
+          <!-- 方底铅笔：贴近 ChatGPT「新聊天」 -->
+          <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <path d="M12 20h9M16.5 3.5a2.121 2.121 0 013 3L8 18l-4 1 1-4L16.5 3.5z" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+          <span v-show="!sidebarCollapsed" class="sidebar-new-chat-label">新对话</span>
         </button>
       </div>
 
-      <div class="chat-history" :class="{ 'is-collapsed': sidebarCollapsed }">
-        <div v-if="!sidebarCollapsed">
-          <div
-            v-for="(chat, index) in chatHistory"
-            :key="index"
-            class="history-item"
-            :class="{ 'active': currentChatId === chat.id }"
-            @click="switchChat(chat.id)"
-          >
-            <span class="chat-title">{{ chat.title }}</span>
-            <button class="delete-btn" @click.stop="deleteChat(index)">✕</button>
-          </div>
+      <div v-show="!sidebarCollapsed" class="sidebar-search-wrap">
+        <label class="sidebar-search-label visually-hidden" for="sidebar-search-input">搜索对话</label>
+        <div class="sidebar-search-inner">
+          <svg class="sidebar-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <circle cx="11" cy="11" r="7" />
+            <path d="M20 20l-3.5-3.5" stroke-linecap="round" />
+          </svg>
+          <input
+            id="sidebar-search-input"
+            v-model="sidebarSearchQuery"
+            type="search"
+            class="sidebar-search-input"
+            placeholder="搜索对话"
+            autocomplete="off"
+            spellcheck="false"
+          />
         </div>
+      </div>
+
+      <div class="chat-history" :class="{ 'is-collapsed': sidebarCollapsed }">
+        <template v-if="!sidebarCollapsed">
+          <template v-if="chatSidebarGroups.length === 0">
+            <p class="sidebar-empty-hint">{{ sidebarSearchQuery.trim() ? '没有匹配的对话' : '暂无对话记录' }}</p>
+          </template>
+          <template v-else>
+            <template v-for="group in chatSidebarGroups" :key="group.key">
+              <div class="history-group-label">{{ group.label }}</div>
+              <div
+                v-for="chat in group.items"
+                :key="chat.id"
+                class="history-row-wrap"
+              >
+                <div
+                  class="history-row"
+                  :class="{ active: currentChatId === chat.id }"
+                  role="button"
+                  tabindex="0"
+                  @click="switchChat(chat.id)"
+                  @keydown.enter.prevent="switchChat(chat.id)"
+                >
+                  <span class="history-row-title">{{ chat.title }}</span>
+                  <button
+                    type="button"
+                    class="history-delete-btn"
+                    title="删除对话"
+                    aria-label="删除对话"
+                    @click.stop="deleteChatById(chat.id)"
+                  >
+                    <svg class="icon-svg-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                      <path d="M18 6L6 18M6 6l12 12" stroke-linecap="round" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+            </template>
+          </template>
+        </template>
       </div>
 
       <div class="sidebar-footer">
         <button
           type="button"
-          class="clear-history-btn"
-          :title="sidebarCollapsed ? '清空对话' : undefined"
-          @click="clearAllHistory"
+          class="sidebar-footer-trigger"
+          :title="sidebarCollapsed ? accountShortLabel : undefined"
+          :aria-expanded="footerMenuOpen"
+          aria-haspopup="menu"
+          @click.stop="onSidebarFooterClick"
         >
-          <span class="icon">🗑</span>
-          <span v-show="!sidebarCollapsed">清空对话</span>
-        </button>
-      </div>
-    </div>
-
-    <!-- 主聊天区域 -->
-    <div class="main-content">
-      <!-- 顶部栏 -->
-      <div class="top-bar">
-        <div class="reply-mode-selector">
-          <label for="reply-mode">回复方式</label>
-          <select id="reply-mode" v-model="replyMode" class="model-select">
-            <option value="stream">流式</option>
-            <option value="plain">一次性</option>
-          </select>
-        </div>
-      </div>
-
-      <!-- 消息列表 -->
-      <div class="messages-container" ref="messagesContainer">
-        <div v-if="messages.length === 0" class="welcome-message">
-          <h1>你好，我是个性化推荐系统</h1>
-          <p>有什么可以帮你的吗？</p>
-        </div>
-
-        <div v-for="(message, index) in messages" :key="index" class="message" :class="message.role">
-          <div v-if="message.role === 'assistant'" class="message-avatar" aria-hidden="true">🤖</div>
-          <div class="message-content">
-            <div
-              v-if="message.role === 'assistant' && message.streaming"
-              class="message-text message-text-streaming"
-            >
-              <!-- 流式阶段也实时走 Markdown 渲染，避免“生成中无格式、结束后才有格式”的割裂体验 -->
-              <div class="stream-markdown" v-html="message.streamingHtml || ''"></div>
-            </div>
-            <div v-else class="message-text" v-html="message.html || ''"></div>
-          </div>
-        </div>
-
-        <!-- 加载中提示 三个点 -->
-        <div v-if="isTyping" class="message assistant">
-          <div class="message-avatar" aria-hidden="true">🤖</div>
-          <div class="message-content">
-            <div class="typing-indicator">
-              <span></span>
-              <span></span>
-              <span></span>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- 输入区域 -->
-      <div class="input-container">
-        <div class="input-wrapper">
-          <textarea
-            v-model="userInput"
-            @keydown.enter.prevent="handleEnter"
-            @input="adjustInputHeight"
-            placeholder="输入你的问题..."
-            class="message-input"
-            rows="1"
-            ref="inputRef"
-          ></textarea>
-          <button
-            class="send-btn"
-            @click="handleSendOrStop"
-            :disabled="!isTyping && !userInput.trim()"
+          <span class="sidebar-footer-avatar" aria-hidden="true">{{ accountShortLabel }}</span>
+          <span v-show="!sidebarCollapsed" class="sidebar-footer-name">旅游助手</span>
+          <svg
+            v-show="!sidebarCollapsed"
+            class="sidebar-footer-chevron"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            aria-hidden="true"
           >
-            <span>{{ isTyping ? '■' : '→' }}</span>
+            <path d="M6 9l6 6 6-6" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+        </button>
+        <div v-if="footerMenuOpen && !sidebarCollapsed" class="sidebar-footer-menu" role="menu" @click.stop>
+          <button type="button" class="history-menu-item" role="menuitem" @click="clearAllHistoryAndCloseMenu">
+            清空所有对话
           </button>
         </div>
-        <div class="input-footer">
-          <span class="hint">Enter 发送，Shift+Enter 换行</span>
+      </div>
+    </aside>
+
+    <!-- 小屏侧栏打开时的遮罩，点击关闭（对齐常见抽屉交互） -->
+    <div
+      v-if="showSidebarBackdrop"
+      class="sidebar-backdrop"
+      aria-hidden="true"
+      @click="toggleSidebar"
+    ></div>
+
+    <!-- 主区：居中对话列 + 底部 Composer -->
+    <main class="main-content">
+      <button
+        v-if="showMobileSidebarTrigger"
+        type="button"
+        class="mobile-sidebar-trigger"
+        aria-label="打开侧栏"
+        @click="toggleSidebar"
+      >
+        <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <path d="M4 6h16M4 12h16M4 18h10" stroke-linecap="round" />
+        </svg>
+      </button>
+
+      <div class="messages-container" ref="messagesContainer">
+        <div v-if="messages.length === 0" class="welcome-message">
+          <div class="welcome-inner">
+            <!-- 品牌 Logo：静态资源置于 frontend/public，构建后由根路径提供 -->
+            <img class="welcome-logo" src="/app-logo.png" alt="旅游攻略助手" />
+            <h1 class="welcome-title">想去哪里旅游？</h1>
+            <p class="welcome-sub">我是旅游攻略助手，行程、路线、景点都可以问我。</p>
+          </div>
+        </div>
+
+        <div
+          v-for="(message, index) in messages"
+          :key="index"
+          class="message-row"
+          :class="message.role"
+        >
+          <div class="message-inner">
+            <!-- 助手回复不展示头像，正文直接与居中列对齐 -->
+            <div class="message-content">
+              <div
+                v-if="message.role === 'assistant' && message.streaming"
+                class="message-text message-text-streaming"
+              >
+                <!-- 流式阶段也实时走 Markdown 渲染，避免“生成中无格式、结束后才有格式”的割裂体验 -->
+                <div class="stream-markdown" v-html="message.streamingHtml || ''"></div>
+              </div>
+              <div v-else class="message-text" v-html="message.html || ''"></div>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="isTyping" class="message-row assistant">
+          <div class="message-inner">
+            <div class="message-content">
+              <div class="typing-indicator">
+                <span></span>
+                <span></span>
+                <span></span>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
-    </div>
+
+      <div class="composer-wrap">
+        <div class="composer-inner">
+          <div class="input-container">
+            <div class="input-shell">
+              <textarea
+                v-model="userInput"
+                @keydown.enter="handleEnter"
+                @input="adjustInputHeight"
+                placeholder="给助手发消息…"
+                class="message-input"
+                rows="1"
+                ref="inputRef"
+              ></textarea>
+              <button
+                type="button"
+                class="send-btn"
+                :class="{ stop: isTyping }"
+                @click="handleSendOrStop"
+                :disabled="!isTyping && !userInput.trim()"
+                :title="isTyping ? '停止生成' : '发送'"
+              >
+                <!-- 纸飞机：示意发送，视觉上比旧三角箭头更清晰 -->
+                <svg v-if="!isTyping" class="send-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                  <path
+                    d="M3.478 2.405a.75.75 0 0 0-.926.94l2.432 7.905H13.5a.75.75 0 0 1 0 1.5H4.984l-2.432 7.905a.75.75 0 0 0 .926.94 60.519 60.519 0 0 0 18.445-8.986.75.75 0 0 0 0-1.218A60.517 60.517 0 0 0 3.478 2.405Z"
+                  />
+                </svg>
+                <svg v-else class="stop-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                  <rect x="6" y="6" width="12" height="12" rx="1" />
+                </svg>
+              </button>
+            </div>
+            <p class="input-hint">内容由 AI 生成，请核对重要信息。Enter 发送 · Shift+Enter 换行</p>
+          </div>
+        </div>
+      </div>
+    </main>
   </div>
 </template>
 
 <script setup>
-import { ref, nextTick, onMounted, onUnmounted } from 'vue'
+import { ref, computed, nextTick, onMounted, onUnmounted } from 'vue'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import {
   abortChatRequest,
   isAbortRequestError,
-  sendChatMessage,
   sendChatMessageStream,
   stopChatSession,
   stopChatSessionKeepalive
@@ -151,9 +267,22 @@ const messages = ref([])
 const userInput = ref('')
 const isTyping = ref(false)
 const sidebarCollapsed = ref(false)
+/** 用于移动端布局：≤768px 视为小屏，侧栏改为抽屉并默认收起 */
+const MOBILE_BREAKPOINT_PX = 768
+const windowWidth = ref(typeof window !== 'undefined' ? window.innerWidth : MOBILE_BREAKPOINT_PX + 1)
+
+const isMobileLayout = computed(() => windowWidth.value <= MOBILE_BREAKPOINT_PX)
+/** 小屏且侧栏收起时显示左上角菜单键（侧栏滑出后该按钮隐藏，避免重复） */
+const showMobileSidebarTrigger = computed(() => isMobileLayout.value && sidebarCollapsed.value)
+/** 小屏且侧栏展开时显示半透明遮罩 */
+const showSidebarBackdrop = computed(() => isMobileLayout.value && !sidebarCollapsed.value)
+
+function syncWindowWidth() {
+  if (typeof window === 'undefined') return
+  windowWidth.value = window.innerWidth
+}
 /** 与后端约定，顶栏已去掉模型切换时仍传默认模型 */
 const DEFAULT_CHAT_MODEL = 'deepseek-chat'
-const replyMode = ref('stream')
 const messagesContainer = ref(null)
 const inputRef = ref(null)
 const autoScrollEnabled = ref(true)
@@ -173,9 +302,115 @@ if (storedUserId) {
   localStorage.setItem('chatUserId', userId.value)
 }
 
+/** 底栏头像两字：从稳定 user_id 派生，贴近 ChatGPT 账户缩写观感 */
+const accountShortLabel = computed(() => {
+  const raw = String(userId.value || '').replace(/[^a-zA-Z0-9]/g, '')
+  if (raw.length >= 2) return raw.slice(0, 2).toUpperCase()
+  return 'ME'
+})
+
+// 侧栏搜索、底栏菜单
+const sidebarSearchQuery = ref('')
+const footerMenuOpen = ref(false)
+
+function toggleFooterMenu() {
+  footerMenuOpen.value = !footerMenuOpen.value
+}
+
+/**
+ * 收起态只显示头像：第一次点击先展开侧栏（否则无法点到搜索等功能），展开后再走账户菜单。
+ */
+function onSidebarFooterClick() {
+  if (sidebarCollapsed.value) {
+    sidebarCollapsed.value = false
+    return
+  }
+  toggleFooterMenu()
+}
+
+function clearAllHistoryAndCloseMenu() {
+  footerMenuOpen.value = false
+  clearAllHistory()
+}
+
+function onSidebarDocPointerDown(e) {
+  const el = e.target
+  if (!el.closest) return
+  if (el.closest('.sidebar-footer-trigger')) return
+  if (el.closest('.sidebar-footer-menu')) return
+  footerMenuOpen.value = false
+}
+
+function onSidebarKeydown(e) {
+  if (e.key !== 'Escape') return
+  footerMenuOpen.value = false
+  if (isMobileLayout.value && !sidebarCollapsed.value) {
+    sidebarCollapsed.value = true
+  }
+}
+
+/** 本地日开始时间戳，用于「今天 / 昨天 / 7 天」分组 */
+function startOfLocalDay(ts) {
+  const d = new Date(ts)
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
+}
+
+const chatsForSidebar = computed(() => {
+  const q = sidebarSearchQuery.value.trim().toLowerCase()
+  let list = chatHistory.value.slice()
+  if (q) list = list.filter((c) => String(c.title || '').toLowerCase().includes(q))
+  list.sort((a, b) => (b.updatedAt ?? b.id ?? 0) - (a.updatedAt ?? a.id ?? 0))
+  return list
+})
+
+/** 对话列表分组：贴近 ChatGPT 的时间簇展示 */
+const chatSidebarGroups = computed(() => {
+  const list = chatsForSidebar.value
+  const today0 = startOfLocalDay(Date.now())
+  const dayMs = 86400000
+  const yesterday0 = today0 - dayMs
+  const weekStart = today0 - 7 * dayMs
+  const today = []
+  const yesterday = []
+  const week = []
+  const older = []
+  for (const chat of list) {
+    const t = chat.updatedAt ?? chat.id ?? 0
+    if (t >= today0) today.push(chat)
+    else if (t >= yesterday0) yesterday.push(chat)
+    else if (t >= weekStart) week.push(chat)
+    else older.push(chat)
+  }
+  const out = []
+  if (today.length) out.push({ key: 'today', label: '今天', items: today })
+  if (yesterday.length) out.push({ key: 'yesterday', label: '昨天', items: yesterday })
+  if (week.length) out.push({ key: 'week', label: '过去 7 天', items: week })
+  if (older.length) out.push({ key: 'older', label: '更早', items: older })
+  return out
+})
+
+/** 把指定会话置顶并刷新活动时间，模拟 ChatGPT 最近对话上浮 */
+function bumpChatToTop(chatId) {
+  const i = chatHistory.value.findIndex((c) => c.id === chatId)
+  if (i < 0) return
+  const row = chatHistory.value[i]
+  row.updatedAt = Date.now()
+  if (i === 0) return
+  chatHistory.value.splice(i, 1)
+  chatHistory.value.unshift(row)
+}
+
+/** 按会话 id 删除一条本地历史（叉号触发，不经过索引以免搜索折叠后错位） */
+function deleteChatById(chatId) {
+  const idx = chatHistory.value.findIndex((c) => c.id === chatId)
+  if (idx < 0) return
+  deleteChat(idx)
+}
+
 // 切换侧边栏
 const toggleSidebar = () => {
   sidebarCollapsed.value = !sidebarCollapsed.value
+  footerMenuOpen.value = false
 }
 
 // 统一 Markdown 渲染入口：普通消息使用缓存 html，流式消息使用 streamingHtml。
@@ -243,11 +478,17 @@ const adjustInputHeight = () => {
   el.style.height = `${next}px`
 }
 
-// 处理 Enter 键
+// 处理 Enter 键：发送前须排除 IME 组字态，否则拼音未确认时按 Enter 会误发
 const handleEnter = (e) => {
   if (e.shiftKey) {
-    return // Shift+Enter 换行
+    return // Shift+Enter 换行：不 preventDefault，交给浏览器插入换行
   }
+  // isComposing：搜狗/系统拼音等组字过程中 Enter 用于确认候选或字母
+  // keyCode 229：部分环境下 IME 按键仍可能被当成 Enter，需一并放行
+  if (e.isComposing || e.keyCode === 229) {
+    return
+  }
+  e.preventDefault()
   sendMessage()
 }
 
@@ -269,6 +510,9 @@ async function startUserTurn() {
 async function endUserTurn() {
   isTyping.value = false
   autoScrollEnabled.value = true
+  if (currentChatId.value) {
+    bumpChatToTop(currentChatId.value)
+  }
   await scrollToBottom(true)
   saveChatHistory()
 }
@@ -419,29 +663,6 @@ function createStreamDirectWriter() {
   }
 }
 
-/** 一次性：await sendChatMessage，整段回复；等待时三个点 */
-const sendMessagePlain = async () => {
-  const userMessage = await startUserTurn()
-  if (!userMessage) return
-  try {
-    const reply = await sendChatMessage(
-      userMessage.content,
-      DEFAULT_CHAT_MODEL,
-      sessionId.value,
-      userId.value
-    )
-    isTyping.value = false
-    messages.value.push(buildRenderedMessage('assistant', reply))
-  } catch (e) {
-    console.error(e)
-    if (isAbortRequestError(e)) return
-    isTyping.value = false
-    pushErrorAssistant(formatSendError(e))
-  } finally {
-    await endUserTurn()
-  }
-}
-
 /** 流式：sendChatMessageStream + 收到即追加；首包到之前三个点 */
 const sendMessageStream = async () => {
   console.log("sendMessageStream===========流式发送消息 \n", userId.value, "\n\n")
@@ -454,7 +675,7 @@ const sendMessageStream = async () => {
       DEFAULT_CHAT_MODEL,
       sessionId.value,
       userId.value,
-      writer.push
+      writer.push,
     )
     writer.finalize(full)
   } catch (e) {
@@ -467,10 +688,7 @@ const sendMessageStream = async () => {
   }
 }
 
-const sendMessage = async () => {
-  if (replyMode.value === 'plain') await sendMessagePlain()
-  else await sendMessageStream()
-}
+const sendMessage = sendMessageStream
 
 /**
  * 发送与停止共用按钮：
@@ -502,10 +720,13 @@ const startNewChat = () => {
       if (sessionId.value) {
         existing.sessionId = sessionId.value
       }
+      bumpChatToTop(existing.id)
     } else if (currentChatId.value == null) {
       // 仅「未归档」的临时会话才新增一条历史
+      const nid = Date.now()
       chatHistory.value.unshift({
-        id: Date.now(),
+        id: nid,
+        updatedAt: nid,
         sessionId: sessionId.value,
         title,
         messages: normalizeMessagesForRender(messages.value)
@@ -527,8 +748,10 @@ const switchChat = (chatId) => {
     sessionId.value = chat.sessionId || crypto.randomUUID()
     if (!chat.sessionId) {
       chat.sessionId = sessionId.value
-      saveChatHistory()
     }
+    // 点击侧栏只打开会话，不置顶、不改 updatedAt（置顶留给真实发消息等活跃行为）
+    saveChatHistory()
+    footerMenuOpen.value = false
   }
 }
 
@@ -581,6 +804,7 @@ const loadChatHistory = () => {
       const parsedHistory = JSON.parse(saved)
       chatHistory.value = (parsedHistory || []).map((chat) => ({
         ...chat,
+        updatedAt: chat.updatedAt ?? chat.id ?? Date.now(),
         messages: normalizeMessagesForRender(chat.messages)
       }))
     }
@@ -591,12 +815,20 @@ const loadChatHistory = () => {
 
 // 组件挂载时加载历史
 onMounted(() => {
+  syncWindowWidth()
+  // 手机首屏默认收起侧栏，避免挡住对话区；桌面保持展开（collapsed 默认 false）
+  if (windowWidth.value <= MOBILE_BREAKPOINT_PX) {
+    sidebarCollapsed.value = true
+  }
   loadChatHistory()
   inputRef.value?.focus()
   nextTick(() => adjustInputHeight())
   messagesContainer.value?.addEventListener('scroll', updateAutoScrollStateByUserPosition, {
     passive: true
   })
+  window.addEventListener('resize', syncWindowWidth)
+  document.addEventListener('pointerdown', onSidebarDocPointerDown)
+  window.addEventListener('keydown', onSidebarKeydown)
   // 刷新、关闭页签或浏览器回收页面时都触发，尽量让后端立即停止旧请求。
   window.addEventListener('beforeunload', stopGeneratingForPageUnload)
   window.addEventListener('pagehide', stopGeneratingForPageUnload)
@@ -604,6 +836,9 @@ onMounted(() => {
 
 onUnmounted(() => {
   messagesContainer.value?.removeEventListener('scroll', updateAutoScrollStateByUserPosition)
+  window.removeEventListener('resize', syncWindowWidth)
+  document.removeEventListener('pointerdown', onSidebarDocPointerDown)
+  window.removeEventListener('keydown', onSidebarKeydown)
   window.removeEventListener('beforeunload', stopGeneratingForPageUnload)
   window.removeEventListener('pagehide', stopGeneratingForPageUnload)
 })
@@ -615,4 +850,4 @@ marked.setOptions({
 })
 </script>
 
-<style scoped src="../styles/chatInterface.css"></style>
+<style scoped lang="less" src="../styles/chatInterface.less"></style>

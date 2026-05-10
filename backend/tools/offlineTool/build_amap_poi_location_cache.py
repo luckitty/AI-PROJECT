@@ -9,7 +9,8 @@ from amap.amap_travel_service import (
 )
 
 
-travel_poi_cache_path = Path(__file__).resolve().parents[1] / "data" / "travel_poi_cache.json"
+# 默认 POI 列表相对 backend/data（本模块在 tools/offlineTool 下）
+travel_poi_cache_path = Path(__file__).resolve().parents[2] / "data" / "travel_poi_cache.json"
 
 
 def load_all_poi_names(poi_cache_file: Path) -> list[str]:

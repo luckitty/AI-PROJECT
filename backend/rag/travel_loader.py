@@ -1,25 +1,30 @@
 from pathlib import Path
 import json
 
-from langchain_core.documents import Document
+from rag.offlineCache.travel_ocr import load_ocr_cache, save_ocr_cache
+from rag.offlineCache.travel_llm_guide_denoise import load_llm_guide_cache
+from rag.offlineCache.travel_cache_docs_build import build_travel_cache_documents
 
-from rag.travel_ocr import (
-    MAX_OCR_CHARS_FOR_EMBED,
-    get_or_build_note_ocr_text,
-    load_ocr_cache,
-    normalize_text,
-    save_ocr_cache,
-)
-from rag.travel_profile_extractor import build_structured_profile, extract_spots
+# 对外加载接口固定「只读 OCR 缓存、不强制刷新大模型攻略缓存」。
+# 离线脚本 tools/offlineTool/rebuild_travel_ocr_and_milvus.py 在调用 load_travel_cache_docs 前按需改为 True，用完再还原。
+loader_allow_runtime_ocr = False
+loader_force_refresh_llm_guide = False
 
 
-def load_travel_cache_docs(data_path="data", city_name=None, allow_runtime_ocr=False):
+def load_travel_cache_docs(
+    data_path="data",
+    city_name=None,
+    use_llm_guide_denoise=False,
+):
     """
-    从 data/cache 下读取旅游笔记缓存，按 note_id 去重并生成 Document（整篇不切分）。
+    从 data/cache 下读取旅游笔记缓存，按 note_id 建索引并生成 Document（整篇不切分）。
+    约定缓存内 note_id 唯一；若未按 City 过滤而扫多文件，同名后者覆盖。
     city_name 传值时只读取对应城市文件（如 北京 -> 北京.json），用于缩小检索域。
-    allow_runtime_ocr 控制是否在查询阶段补跑 OCR：
-    - False：只复用已有 OCR 缓存，不做实时识别（默认，保证查询低时延）
-    - True：缓存缺失时允许识别图片并回写缓存（适合离线预处理）
+    OCR 仅使用 data/cache_ocr_text.json 已有条目；实时识别由离线重建脚本通过 loader_allow_runtime_ocr 打开。
+
+    use_llm_guide_denoise：为 True 时，对缓存未命中的笔记调用大模型生成「纯攻略正文」并写入
+    data/cache_llm_guide_body.json；为 False 时仍会从该文件读取已有结果（离线跑过后在线自动生效）。
+    强制忽略已有大模型条目由 loader_force_refresh_llm_guide 控制（仅重建脚本使用）。
     """
     data_root = Path(data_path)
     cache_dir = data_root / "cache"
@@ -32,6 +37,8 @@ def load_travel_cache_docs(data_path="data", city_name=None, allow_runtime_ocr=F
         if not city_file.is_file():
             return []
         target_files = [city_file]
+
+    print("travel_loader===========target_files \n", target_files)
 
     merged = {}
     for path in target_files:
@@ -52,77 +59,25 @@ def load_travel_cache_docs(data_path="data", city_name=None, allow_runtime_ocr=F
             item_city = str(path.stem).strip()
             if item_city:
                 item["city"] = item_city
-            prev = merged.get(note_id)
-            if prev is None:
-                merged[note_id] = item
-                continue
-            has_images = bool(item.get("feed_images"))
-            prev_has_images = bool(prev.get("feed_images"))
-            if has_images and not prev_has_images:
-                merged[note_id] = item
+            merged[note_id] = item
 
     ocr_cache_path = data_root / "cache_ocr_text.json"
     ocr_cache = load_ocr_cache(ocr_cache_path)
-    cache_updated = False
 
-    docs = []
-    backend_root = data_root.resolve().parent
-    for note in merged.values():
-        title = normalize_text(note.get("title"))
-        desc = normalize_text(note.get("desc"))
-        ocr_text, changed = get_or_build_note_ocr_text(
-            note,
-            backend_root,
-            ocr_cache,
-            allow_runtime_ocr=allow_runtime_ocr,
-        )
-        if changed:
-            cache_updated = True
-        ocr_text_for_embed = normalize_text(ocr_text)[:MAX_OCR_CHARS_FOR_EMBED]
-        inferred_city = normalize_text(note.get("city") or city_name)
-        structured_profile = build_structured_profile(
-            city_name=inferred_city,
-            title=title,
-            desc=desc,
-            ocr_text=ocr_text,
-        )
-        profile_text_for_embed = (
-            f"城市:{structured_profile['city']}\n"
-            f"景点:{' '.join(structured_profile['spots'])}\n"
-            f"美食:{' '.join(structured_profile['foods'])}\n"
-            f"交通:{' '.join(structured_profile['transport'])}\n"
-            f"标签:{' '.join(structured_profile['tags'])}\n"
-            f"旅行风格:{structured_profile['travel_style']}\n"
-            f"预算:{structured_profile['budget_level']}\n"
-            f"时长:{structured_profile['duration']}"
-        ).strip()
-        page_content = f"{title}\n{desc}\n{ocr_text_for_embed}\n{profile_text_for_embed}".strip()
-        docs.append(
-            Document(
-                page_content=page_content,
-                metadata={
-                    "source_type": "travel_cache",
-                    "note_id": note.get("note_id"),
-                    "note_url": note.get("note_url"),
-                    "title": title,
-                    "desc": desc,
-                    "ocr_text": ocr_text,
-                    "city": structured_profile["city"],
-                    "spots_text": " ".join(structured_profile["spots"]),
-                    "foods_text": " ".join(structured_profile["foods"]),
-                    "transport_text": " ".join(structured_profile["transport"]),
-                    "duration": structured_profile["duration"],
-                    "budget_level": structured_profile["budget_level"],
-                    "tags_text": " ".join(structured_profile["tags"]),
-                    "travel_style": structured_profile["travel_style"],
-                    "raw_summary": structured_profile["raw_summary"],
-                    "itinerary_json": json.dumps(structured_profile["itinerary"], ensure_ascii=False),
-                    "structured_profile_json": json.dumps(structured_profile, ensure_ascii=False),
-                    # Milvus metadata 字段不支持 list/dict，这里序列化成 JSON 字符串，使用侧再反序列化。
-                    "feed_images_json": json.dumps(note.get("feed_images") or [], ensure_ascii=False),
-                },
-            )
-        )
+    guide_cache_path = data_root / "cache_llm_guide_body.json"
+    guide_cache = load_llm_guide_cache(guide_cache_path)
+
+    docs, cache_updated = build_travel_cache_documents(
+        merged,
+        data_root,
+        city_name,
+        ocr_cache,
+        guide_cache,
+        guide_cache_path,
+        allow_runtime_ocr=loader_allow_runtime_ocr,
+        use_llm_guide_denoise=use_llm_guide_denoise,
+        force_refresh_llm_guide=loader_force_refresh_llm_guide,
+    )
     if cache_updated:
         save_ocr_cache(ocr_cache_path, ocr_cache)
     return docs

@@ -1,6 +1,6 @@
 #!/bin/bash
 
-echo "🚀 启动 AI Project"
+echo "🚀 启动 travel-guide-agent"
 echo "================================"
 
 # 检查 .env 文件

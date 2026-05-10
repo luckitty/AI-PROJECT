@@ -3,7 +3,7 @@ from typing import Any, Callable, List
 
 from core.llm import get_llm
 
-# LangGraph custom 通道写入器：由 travel_node 传入，把攻略正文增量推到 SSE。
+# LangGraph custom 通道写入器：由 response 节点经 search_travel 传入，把攻略正文增量推到 SSE。
 StreamWriter = Callable[[dict[str, Any]], None]
 
 
@@ -23,11 +23,11 @@ def build_itinerary_format_instruction() -> str:
         "- 全文精炼：少寒暄少重复，每个景点一两句话写玩法+建议时长即可；不要堆砌长段科普。\n\n"
         "【全局要求】\n"
         "- 整个路线中餐厅不重复，景点不重复，每日景点安排尽量顺路。\n"
-        "- 行程最后用两三句话总结，并推荐几个正文未写到的餐厅即可（不必展开）。\n"
+        "- 行程最后用两三句话总结，并推荐几个未提到的餐厅即可（不必展开）。\n"
         "- 语言稍微幽默风趣，不要过于正式；可适当使用表情或图标提升可读性。\n\n"
         "【每日结构（每一天必须遵守）】\n"
-        "游玩安排：推荐 2–3 个景点并写明建议游玩时长。\n"
-        "美食推荐：推荐景点附近的餐厅，菜系不能重复（例如已推荐烤鸭则另一顿避免重复同一菜系）。\n"
+        "游玩安排：推荐 2–3 个景点并写明建议游玩时长。景点安排要合理，不要东一个西一个\n"
+        "美食推荐：一定要推荐景点附近的美食，距离景点一定不能远。菜系不能重复（例如已推荐烤鸭则另一顿避免重复同一菜系）。\n"
     )
 
 
@@ -53,15 +53,22 @@ def stream_travel_guide_llm(
     query: str,
     body_material: str,
     stream_writer: StreamWriter | None,
+    conversation_history: str | None = None,
 ) -> str:
     """
     旅游攻略唯一一次大模型调用：指令仅用 build_itinerary_format_instruction，
-    用户问题与检索素材拼接在同一条用户消息中；有 stream_writer 时流式写出 token。
+    附多轮对话节选 + 当前问句 + 检索素材；有 stream_writer 时流式写出 token。
     """
     instruction = build_itinerary_format_instruction()
+    ch = (conversation_history or "").strip()
+    history_block = (
+        f"\n【本轮为止的多轮对话（理解偏好与指代；不要说看不到上文）】\n{ch}\n"
+        if ch
+        else ""
+    )
     prompt = f"""{instruction}
-
-用户问题：
+{history_block}
+用户当前问题：
 {query}
 
 检索素材（优先依据下列事实编排；不够再合理补充，勿编造素材中不存在的关键事实）：
@@ -96,9 +103,15 @@ def build_llm_itinerary_bundle(
     query: str,
     body_material: str,
     stream_writer: StreamWriter | None = None,
+    conversation_history: str | None = None,
 ) -> dict:
     """
-    组装单次攻略生成：返回 visible_answer 供序列化进 travel_context。
+    组装单次攻略生成：返回 visible_answer，供 search_travel 序列化后由 response 解析。
     """
-    visible_answer = stream_travel_guide_llm(query, body_material, stream_writer)
+    visible_answer = stream_travel_guide_llm(
+        query,
+        body_material,
+        stream_writer,
+        conversation_history=conversation_history,
+    )
     return {"visible_answer": visible_answer}

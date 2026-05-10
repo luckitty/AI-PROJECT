@@ -1,5 +1,5 @@
 @echo off
-echo 🚀 启动 AI Project
+echo 🚀 启动 travel-guide-agent
 echo ========================================
 
 REM 检查 .env 文件

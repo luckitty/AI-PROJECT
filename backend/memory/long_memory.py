@@ -1,7 +1,7 @@
 """
 长期记忆：用 Milvus 向量库按用户检索记忆（与 RAG 知识库分 collection，避免混写）。
 
-连接参数与 ``rag.vectorstores.milvus_client.get_milvus_connection_args`` 一致；
+连接参数与 ``rag.original.vectorstores.milvus_client.get_milvus_connection_args`` 一致；
 collection 名称见本模块常量 ``LONG_MEMORY_COLLECTION``（与 RAG 默认的 ``rag_collection`` 区分）。
 """
 import uuid
@@ -10,9 +10,9 @@ from datetime import datetime, timezone
 from langchain_core.documents import Document
 from langchain_milvus import Milvus
 
-import rag.vectorstores.milvus_langchain_compat  # noqa: F401
-from rag.embedding import get_embeddings
-from rag.vectorstores.milvus_client import get_milvus_connection_args
+import rag.original.vectorstores.milvus_langchain_compat  # noqa: F401
+from rag.original.embedding import get_embeddings
+from rag.original.vectorstores.milvus_client import get_milvus_connection_args
 
 # 与 RAG 默认 collection 区分开，长期记忆单独存一份
 LONG_MEMORY_COLLECTION = "long_memory"

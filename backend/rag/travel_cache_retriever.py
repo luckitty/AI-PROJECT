@@ -5,19 +5,26 @@
 import hashlib
 import json
 import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from pathlib import Path
 from typing import Any, List, Optional, Tuple
 
-from rag.embedding import get_embeddings
-from rag.loader import get_docs
+import httpx
+
+from rag.original.embedding import get_embeddings
+from rag.original.loader import get_docs
 from langchain_milvus import Milvus
 from pymilvus import connections, utility
-from rag.vectorstores.milvus_client import milvus_connection_args
+from rag.original.vectorstores.milvus_client import milvus_connection_args
 
 BACKEND_ROOT = Path(__file__).resolve().parent.parent
 CACHE_DIR = BACKEND_ROOT / "data" / "cache"
 TRAVEL_COLLECTION_NAME_PREFIX = "travel_cache_collection"
 EMBED_BATCH_SIZE = 32
+
+# Milvus similarity_search 偶发数十秒阻塞（智谱 embedding 慢、gRPC 积压等），流式前端此阶段无任何 SSE 会显得「卡死」。
+# 用独立线程包一层超时：超时则降级为当前城市语料前若干条再重排，优先保证可响应。
+SIMILARITY_SEARCH_THREAD_TIMEOUT_SECONDS = 32
 
 cached_signatures = {}
 cached_docs_by_key = {}
@@ -31,6 +38,16 @@ INTENT_KEYWORD_TO_FIELDS = {}
 for field_name, keywords in INTENT_FIELD_KEYWORDS.items():
     for keyword in keywords:
         INTENT_KEYWORD_TO_FIELDS.setdefault(keyword, []).append(field_name)
+
+
+def embeddingRequestTimedOut(err: BaseException) -> bool:
+    """
+    判断是否为智谱 embedding 或底层 httpx 的读超时。
+    此类失败时若直接抛给 LangGraph，前端会长时间无 token；因此检索侧可降级为本地前若干条文档。
+    """
+    if isinstance(err, httpx.TimeoutException):
+        return True
+    return type(err).__name__ == "APITimeoutError"
 
 # 城市路由缓存：避免每次请求都重新 glob cache 目录。
 cached_city_file_signature = tuple()
@@ -240,17 +257,33 @@ def ensure_travel_vectorstore_by_city(city_name: Optional[str]):
                 f"总耗时={time.perf_counter() - span_started_at:.2f}s"
             )
             return cached_docs_by_key[cache_key], cached_vectorstores[cache_key]
-        except Exception:
-            # 复用失败（版本/字段不一致等）时回退到下方全量重建，避免 search_travel 整条链路抛错无响应。
+        except Exception as exc:
+            # 复用失败（版本/字段不一致、连接超时等）时回退到下方全量重建，避免整条链路无响应。
+            # 打印具体原因便于区分「数据未变却反复重建」与「缓存文件变更触发的合理重建」。
             print(
                 "travel_rag_timing===========ensure_vectorstore_by_city Milvus复用失败将全量重建 "
-                f"city={city_name!r} key={cache_key}"
+                f"city={city_name!r} key={cache_key} reason={exc!r}"
             )
 
     # 旅游域使用独立 Milvus collection，避免覆盖主知识库 collection。
     # 同时每个城市 key 使用独立 collection，避免切换城市时互相 drop_old。
     # 智谱 embedding 接口单次最多 64 条，这里显式分批入库，避免 from_documents 一次性提交超限。
     embed_span_started_at = time.perf_counter()
+    if persisted_sig != current_signature:
+        print(
+            "travel_rag_timing===========ensure_vectorstore_by_city 全量重建原因: 笔记文件签名变更或未持久化 "
+            f"city={city_name!r} key={cache_key}"
+        )
+    elif not milvus_has_collection_sync(target_collection_name):
+        print(
+            "travel_rag_timing===========ensure_vectorstore_by_city 全量重建原因: Milvus 尚无 collection "
+            f"{target_collection_name}"
+        )
+    else:
+        print(
+            "travel_rag_timing===========ensure_vectorstore_by_city 全量重建原因: 连接复用 Milvus 失败（见上文 reason） "
+            f"city={city_name!r}"
+        )
     embedding = get_embeddings()
     texts = [doc.page_content for doc in docs]
     metadatas = [doc.metadata for doc in docs]
@@ -321,11 +354,34 @@ def retrieve_travel_docs(query: str, top_k: int = 4) -> List:
     effective_top_k = min(top_k, len(docs))
     if city_name:
         effective_top_k = min(max(top_k, 6), len(docs))
-    initial_k = max(effective_top_k * 3, effective_top_k, 24)
-    initial_k = min(initial_k, len(docs))
+    # 召回候选条数：原先 *3 且下限 24，容易放大 Milvus 单次检索耗时；改为约 2×有效条数、上限 16，足够后续结构化重排出 top_k。
+    initial_k = min(max(effective_top_k * 2, effective_top_k, 10), len(docs), 16)
     print("initial_k===========initial_k \n", initial_k, "\n")
     search_started_at = time.perf_counter()
-    candidates = vectorstore.similarity_search(query, k=initial_k)
+    try:
+        candidates = run_similarity_search_bounded(
+            vectorstore,
+            query,
+            initial_k,
+            float(SIMILARITY_SEARCH_THREAD_TIMEOUT_SECONDS),
+        )
+        if not candidates:
+            take = min(initial_k, len(docs))
+            candidates = docs[:take]
+            print(
+                "travel_rag_timing===========retrieve_travel_docs similarity_search 空结果或超时后顺序截取 "
+                f"take={take} 条参与重排"
+            )
+    except Exception as ex:
+        # Milvus 向量检索前会对 query 做 embed；智谱侧偶发长时间不返回会触发读超时，与具体 query 文案无必然关系。
+        if not embeddingRequestTimedOut(ex):
+            raise
+        take = min(initial_k, len(docs))
+        candidates = docs[:take]
+        print(
+            "travel_rag_timing===========retrieve_travel_docs similarity_search 因 embedding 超时降级 "
+            f"exc_type={type(ex).__name__!r} 使用当前城市语料前 {take} 条做重排"
+        )
     search_seconds = time.perf_counter() - search_started_at
 
     rerank_started_at = time.perf_counter()
@@ -344,6 +400,35 @@ def retrieve_travel_docs(query: str, top_k: int = 4) -> List:
         f"返回条数={len(ranked)} effective_top_k={effective_top_k}"
     )
     return ranked
+
+
+def run_similarity_search_bounded(vectorstore, query: str, initial_k: int, timeout_seconds: float):
+    """
+    在独立线程中执行向量检索并在超时内返回；超时或 embedding 读超时则返回空列表，
+    由调用方用语料顺序截取降级（与原先 except 分支一致）。
+    """
+
+    def task():
+        return vectorstore.similarity_search(query, k=initial_k)
+
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="travel_milvus_sim") as pool:
+        fut = pool.submit(task)
+        try:
+            return fut.result(timeout=timeout_seconds)
+        except FuturesTimeout:
+            print(
+                "travel_rag_timing===========retrieve_travel_docs similarity_search 线程超时 "
+                f"k={initial_k} timeout={timeout_seconds}s，降级为顺序截取语料"
+            )
+            return []
+        except Exception as ex:
+            if embeddingRequestTimedOut(ex):
+                print(
+                    "travel_rag_timing===========retrieve_travel_docs similarity_search 线程内 embedding 超时 "
+                    f"exc_type={type(ex).__name__!r}"
+                )
+                return []
+            raise
 
 
 def infer_query_intent_fields(query: str) -> list[str]:

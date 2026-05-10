@@ -2,7 +2,6 @@ from pathlib import Path
 import json
 
 MAX_IMAGES_PER_NOTE_FOR_OCR = 8
-MAX_OCR_CHARS_FOR_EMBED = 1200
 ocr_engine = None
 
 

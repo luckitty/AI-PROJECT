@@ -2,7 +2,7 @@
 短期记忆（Redis）
 
 - **LangGraph Agent**：使用 ``RedisSaver`` 作为 ``checkpointer``，按 ``thread_id`` 持久化
-  整图状态（含 messages、工具调用等），与服务进程无关，并支持 ``delete_thread`` 清空会话。
+  ``AgentState``（含 ChatGPT 式 ``messages`` 列表）；与服务进程无关，并支持 ``delete_thread`` 清空会话。
 - **Runnable 链**（可选）：``get_redis_history`` 基于 ``RedisChatMessageHistory``，
   仅适合 ``RunnableWithMessageHistory``，与 Agent 的检查点机制不同，二者勿混用。
 """

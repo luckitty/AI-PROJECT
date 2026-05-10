@@ -114,16 +114,38 @@ export const sendChatMessage = async (message, model = 'deepseek-chat', sessionI
 }
 
 /**
- * 把 SSE 里「data:」后面那一截字符串解析成要给用户看的正文。
- *
- * 后端约定两种形式：
- * 1) JSON：{"content":"..."} 或带 error 字段 —— 一行一条，正文里即使有换行也不会弄坏协议
- * 2) 纯文本：兼容旧格式或非 JSON 行
- *
- * @param {string} raw - 去掉 "data: " 前缀后的内容（可能仍含首尾空白）
- * @returns {string} 拼进完整回复里的一段文字；空串表示本行无正文（可跳过）
+ * 将 SSE JSON 里的 content 统一成字符串（兼容 LangChain / OpenAI 的块数组形态）。
+ * 若误把数组当 truthy 拼接，会得到空增量，界面表现为「一直没字」。
+ */
+function normalizeSseContent(parsed) {
+  const c = parsed.content ?? parsed.message ?? parsed.reply
+  if (c == null) return ''
+  if (typeof c === 'string') return c
+  if (Array.isArray(c)) {
+    const parts = []
+    for (const block of c) {
+      if (typeof block === 'string') {
+        parts.push(block)
+      } else if (block && typeof block === 'object') {
+        const t = block.text
+        if (typeof t === 'string') parts.push(t)
+      }
+    }
+    return parts.join('')
+  }
+  return String(c)
+}
+
+/**
+ * 解析 SSE data 行内核。
+ * - kind 'typing'：心跳占位（当前前端可忽略，保留兼容）。
+ * - kind 'text'：正文增量。
+ * - kind 'done'：[DONE] 或空包 / 暂不展示的 meta。
  */
 function parseSseDataPayload(raw) {
+  if (raw === '[DONE]' || raw === '') {
+    return { kind: 'done' }
+  }
   let parsed = null
   try {
     parsed = JSON.parse(raw)
@@ -131,29 +153,35 @@ function parseSseDataPayload(raw) {
     parsed = null
   }
   if (parsed && typeof parsed === 'object') {
-    // 后端用 JSON 传错误时在这里抛出，外层 catch 会交给页面显示
     if (parsed.error) throw new Error(parsed.error)
-    return parsed.content || parsed.message || parsed.reply || ''
+    if (parsed.typing === true) {
+      return { kind: 'typing' }
+    }
+    // 人机断点等非正文事件：勿当成 content 空串丢弃逻辑之外的副作用
+    if (parsed.type === 'interrupt') {
+      return { kind: 'done' }
+    }
+    const text = normalizeSseContent(parsed)
+    return { kind: 'text', value: text }
   }
-  return raw
+  return { kind: 'text', value: raw }
 }
 
 /**
  * 解析单行 SSE 事件，兼容 "data: xxx" 与 "data:xxx" 两种写法。
- * 返回 null 表示该行不是 data 事件或无正文。
  */
 function parseSseDataLine(line) {
   const normalized = String(line || '').trim()
   if (!normalized.startsWith('data:')) return null
   const raw = normalized.slice(5).trimStart().trimEnd()
-  if (!raw || raw === '[DONE]') return ''
+  if (!raw) return { kind: 'done' }
   return parseSseDataPayload(raw)
 }
 
 /**
  * 流式请求 POST /api/chat/stream（SSE）。
  * 首包到达前的「三个点」由 ChatInterface.vue 在首次 onChunk 之前保持 isTyping；
- * 每解析出一小段正文会调 onChunk，由页面直接拼进助手气泡（与常见 ChatGPT 类流式一致）。
+ * 每解析出一小段正文会调 onChunk。
  */
 export const sendChatMessageStream = async (
   message,
@@ -197,19 +225,22 @@ export const sendChatMessageStream = async (
       // 最后一项可能是半行，留到下一轮
       sseBuffer = lines.pop() ?? ''
       for (const line of lines) {
-        const piece = parseSseDataLine(line)
-        if (piece) {
-          fullResponse += piece
-          // 交给页面直接追加到助手气泡（流式展示）
-          if (typeof onChunk === 'function') onChunk(piece)
+        const ev = parseSseDataLine(line)
+        if (!ev || ev.kind === 'done') continue
+        if (ev.kind === 'typing') {
+          continue
+        }
+        if (ev.kind === 'text' && ev.value) {
+          fullResponse += ev.value
+          if (typeof onChunk === 'function') onChunk(ev.value)
         }
       }
       // 结束时把缓冲区最后一行也尝试解析，避免无换行尾包被漏掉或延后到下一次请求。
       if (done && sseBuffer) {
-        const tailPiece = parseSseDataLine(sseBuffer)
-        if (tailPiece) {
-          fullResponse += tailPiece
-          if (typeof onChunk === 'function') onChunk(tailPiece)
+        const tailEv = parseSseDataLine(sseBuffer)
+        if (tailEv && tailEv.kind === 'text' && tailEv.value) {
+          fullResponse += tailEv.value
+          if (typeof onChunk === 'function') onChunk(tailEv.value)
         }
       }
       if (done) break

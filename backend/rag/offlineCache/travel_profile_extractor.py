@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from pathlib import Path
 import json
 import re
@@ -132,7 +134,6 @@ def load_cached_attraction_names() -> set[str]:
     try:
         with open(travel_poi_cache_path, "r", encoding="utf-8") as file:
             data = json.load(file)
-            print("load_cached_attraction_names===========data \n", data, "\n")
     except (OSError, json.JSONDecodeError):
         return set()
     attraction_list = data.get("attraction") if isinstance(data, dict) else []
@@ -378,9 +379,24 @@ def extract_tags(text: str) -> list[str]:
     return unique_keep_order(tags)[:8]
 
 
-def build_structured_profile(city_name: str, title: str, desc: str, ocr_text: str) -> dict:
-    """融合正文与 OCR，输出结构化旅游画像。"""
-    merged_text = f"{title}\n{desc}\n{ocr_text}".strip()
+def build_structured_profile(
+    city_name: str,
+    title: str,
+    desc: str,
+    ocr_text: str,
+    guide_body: str | None = None,
+) -> dict:
+    """
+    融合正文与 OCR，输出结构化旅游画像。
+
+    若提供 guide_body（大模型去噪合并后的纯攻略正文），则不再把 desc 与 ocr 拼进 merged_text，
+    避免重复段落干扰景点/行程抽取。
+    """
+    guide = (guide_body or "").strip()
+    if guide:
+        merged_text = f"{title}\n{guide}".strip()
+    else:
+        merged_text = f"{title}\n{desc}\n{ocr_text}".strip()
 
     return {
         "city": city_name,

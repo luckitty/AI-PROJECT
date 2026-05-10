@@ -1,5 +1,5 @@
 from langchain_community.embeddings import ZhipuAIEmbeddings
-from backend.core.config import ZHIPU_API_KEY
+from core.config import ZHIPU_API_KEY
 
 # =========================
 # 2️⃣ Embedding

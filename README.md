@@ -1,4 +1,4 @@
-# DeepSeek Chat（AI 助手）
+# travel-guide-agent（旅游攻略助手）
 
 基于 **FastAPI + Vue 3 + Vite** 的对话应用：前端为类 DeepSeek 的聊天界面；后端对话主路径为 **LangGraph 节点编排**（`planner` → `memory` / `rag` / `tool` → `response` → `save_memory`），底层模型走 **DeepSeek 兼容 OpenAI 接口**。支持 **短期会话检查点（Redis）**、**本地 RAG（Milvus + 混合检索 + 可选重排）** 与 **天气 / 演示股价 / 联网搜索** 等工具。
 
@@ -21,7 +21,7 @@
 ## 仓库结构（要点）
 
 ```
-ai-project/
+travel-guide-agent/
 ├── backend/
 │   ├── main.py                    # FastAPI 入口（默认 :8000）
 │   ├── api/chat.py                # /api/chat、/stream、/history、/models

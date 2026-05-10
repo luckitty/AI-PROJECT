@@ -1,4 +1,4 @@
-# DeepSeek Chat - AI 助手
+# travel-guide-agent（前端）
 
 一个基于 Vue3 和 FastAPI 的 AI 聊天应用，界面类似于 DeepSeek。
 
