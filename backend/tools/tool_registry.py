@@ -81,6 +81,7 @@ class ToolRegistry:
         llm = get_llm(streaming=False, temperature=0, max_tokens=180)
         msg = llm.invoke(prompt)
         text = msg.content if hasattr(msg, "content") else str(msg)
+        print("select_tool===========select_tool \n", text, "\n")
         try:
             # 最简单实现：要求模型直接返回 JSON 字符串。
             return json.loads((text or "").strip())
@@ -103,6 +104,7 @@ class ToolRegistry:
             args = {}
 
         tool = self.tools.get(tool_name)
+        print("tool===========tool \n", tool, "\n")
 
         if not tool:
             return f"工具不存在: {tool_name}"

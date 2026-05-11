@@ -279,6 +279,7 @@ def amap_route(
         return "高德密钥未配置，无法算路。"
     origin_place = str(origin_place or "").strip()
     destination_place = str(destination_place or "").strip()
+    print("amap_route===========amap_route \n", origin_place, destination_place, city, destination_city, "\n")
     city = str(city or "").strip()
     destination_city = str(destination_city or "").strip()
     if not origin_place or not destination_place:
