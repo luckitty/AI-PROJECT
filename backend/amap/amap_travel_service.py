@@ -267,22 +267,26 @@ def resolve_route_endpoints(origin_place: str, destination_place: str, city: str
     return maybe_fix_far_points(o_inf, d_inf, "", "")
 
 
-def search_poi_location(keyword: str, city_name: str) -> dict | None:
+def search_poi_location(keyword: str, city_name: str = "", citylimit: bool = True) -> dict | None:
     """
-    用高德关键词搜索拿 POI 坐标；供本地缓存构建脚本等工具链使用（不再参与旅游正文算路）。
+    用高德关键词搜索拿 POI 坐标与 poi_id；专属地图等场景依赖 id 字段，勿仅用 geocode。
+    citylimit=False 时放宽同城限制，用于有城市仍搜不到时的兜底。
     """
+    keyword = str(keyword or "").strip()
     if not keyword or not AMAP_KEY:
         return None
     url = "https://restapi.amap.com/v3/place/text"
-    params = {
+    params: dict = {
         "key": AMAP_KEY,
         "keywords": keyword,
-        "city": city_name,
-        "citylimit": "true",
+        "citylimit": "true" if citylimit else "false",
         "offset": 1,
         "page": 1,
         "extensions": "base",
     }
+    city = str(city_name or "").strip()
+    if city:
+        params["city"] = city
     try:
         response = requests.get(url, params=params, timeout=10)
         data = response.json()
@@ -297,10 +301,12 @@ def search_poi_location(keyword: str, city_name: str) -> dict | None:
     location = str(top_poi.get("location") or "").strip()
     if not location or "," not in location:
         return None
+    poi_id = str(top_poi.get("id") or "").strip()
     return {
         "name": top_poi.get("name") or keyword,
         "location": location,
         "address": top_poi.get("address") or "",
+        "poi_id": poi_id,
     }
 
 

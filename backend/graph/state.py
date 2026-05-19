@@ -18,6 +18,7 @@ class AgentState(TypedDict):
 
     need_rag: bool
     need_tool: bool
+    need_amap_mcp: bool
     need_memory: bool
 
     # planner 判定终稿是否需要带多轮历史；false 时 response 只喂当前句（仍可有记忆/工具结果）。
@@ -36,6 +37,17 @@ class AgentState(TypedDict):
 
     # True：用户在人机断点选择终止，或节点内因 interrupt_manager.stop（断连/stop）协作结束本轮。
     human_halt: bool
+
+    # 上一轮已输出旅游攻略后，是否等待用户确认导入高德专属地图。
+    pending_amap_personal_map_offer: NotRequired[bool]
+    # 待导入专属地图时缓存的攻略正文（不含末尾追问文案）。
+    last_travel_guide_for_map: NotRequired[str]
+    # 本回合用户确认生成专属地图（planner 写入，amap/response 消费后清除）。
+    confirm_amap_personal_map: NotRequired[bool]
+    # 本回合用户拒绝生成专属地图。
+    decline_amap_personal_map: NotRequired[bool]
+    # amap 节点刚完成专属地图生成，response 应直出链接勿再调 LLM。
+    amap_personal_map_ready: NotRequired[bool]
 
 
 def build_initial_state(
@@ -60,6 +72,7 @@ def build_initial_state(
 
         "need_rag": False,
         "need_tool": False,
+        "need_amap_mcp": False,
         "need_memory": False,
 
         "need_history": True,

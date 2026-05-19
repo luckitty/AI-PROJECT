@@ -65,6 +65,7 @@ human_checkpoint_after_planner = build_human_checkpoint(
         "need_rag": s.get("need_rag"),
         "need_memory": s.get("need_memory"),
         "need_tool": s.get("need_tool"),
+        "need_amap_mcp": s.get("need_amap_mcp"),
         "need_history": s.get("need_history"),
     }
 )
@@ -74,6 +75,16 @@ human_checkpoint_after_rag = build_human_checkpoint(
         "checkpoint": "after_rag",
         "session_id": s.get("session_id"),
         "need_rag": s.get("need_rag"),
+    }
+)
+
+# 长期记忆节点之后：可能继续进本地旅游 RAG，也可能直接去 capability。
+human_checkpoint_after_memory = build_human_checkpoint(
+    lambda s: {
+        "checkpoint": "after_memory",
+        "session_id": s.get("session_id"),
+        "need_rag": s.get("need_rag"),
+        "need_memory": s.get("need_memory"),
     }
 )
 

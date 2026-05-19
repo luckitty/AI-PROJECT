@@ -257,6 +257,7 @@ def build_multimodal_report(
         ordered.get("transit", ""),
     ]
     body = "\n".join(blocks)
+    print("amap_route===========body \n", body, "\n")
     tail = (
         "\n\n【回复要求】综合以下步行、打车、公交/地铁信息给用户作简短说明；"
         "勿复述逐步转向或米级导航。"
@@ -279,7 +280,7 @@ def amap_route(
         return "高德密钥未配置，无法算路。"
     origin_place = str(origin_place or "").strip()
     destination_place = str(destination_place or "").strip()
-    print("amap_route===========amap_route \n", origin_place, destination_place, city, destination_city, "\n")
+
     city = str(city or "").strip()
     destination_city = str(destination_city or "").strip()
     if not origin_place or not destination_place:
@@ -296,4 +297,5 @@ def amap_route(
     oname = str(origin_info.get("name") or origin_place).strip()
     dname = str(dest_info.get("name") or destination_place).strip()
     cityd = destination_city or city
+    print("amap_route===========amap_route \n", oloc, dloc, city, cityd, oname, dname, "\n")
     return build_multimodal_report(oloc, dloc, city, cityd, oname, dname)

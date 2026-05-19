@@ -73,10 +73,11 @@ travel-guide-agent/
 | `DEEPSEEK_API_KEY` | 对话模型（必填） |
 | `DEEPSEEK_BASE_URL` | 可选，默认 `https://api.deepseek.com` |
 | `MODEL_NAME` | 可选，默认 `deepseek-chat` |
-| `ZHIPU_API_KEY` | RAG 嵌入等需要时使用 |
-| `AMAP_KEY` | 天气、`amap_route` 需要 |
-| `LANGSMITH_API_KEY` / `LANGSMITH_TRACING` | 可选，LangSmith 追踪 |
-| `USE_RERANKER` | 设为 `0` / `false` / `no` 可关闭 CrossEncoder 精排（`rag/original/retriever.py` 等），加快启动、省资源 |
+
+| `ZHIPU_API_KEY` | RAG 向量嵌入（智谱 `embedding-3`）需要 |
+| `AMAP_KEY` | 天气工具（高德）需要 |
+| `USE_RERANKER` | 设为 `0` / `false` 等可关闭 CrossEncoder 精排，加快启动、省资源 |
+| `LANGSMITH_API_KEY` | 可选：填写即开启 LangSmith 追踪（内部会设 `LANGCHAIN_TRACING_V2=true`）；项目名见 `backend/core/config.py` 中 `LANGCHAIN_PROJECT` |
 
 **Milvus**（`backend/rag/original/vectorstores/milvus_client.py`）：
 

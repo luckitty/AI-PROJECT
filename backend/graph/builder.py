@@ -9,12 +9,14 @@ from agents.planner_node import planner_node
 from agents.memory_node import memory_node
 from agents.rag_node import rag_node
 from agents.tool_node import tool_node
+from agents.amap_mcp_node import amap_mcp_node
 from agents.response_node import response_node
 from agents.save_memory_node import save_memory_node
 from graph.interrupt import (
     human_checkpoint_start,
     human_checkpoint_after_planner,
     human_checkpoint_after_rag,
+    human_checkpoint_after_memory,
     human_checkpoint_after_capability,
     human_checkpoint_after_response,
 )
@@ -26,6 +28,17 @@ def route_after_rag(state):
     """
     if state.get("human_halt"):
         return "halt"
+    return "capability"
+
+
+def route_after_memory(state):
+    """
+    memory 之后：若本轮仍需要六城本地旅游 RAG，则进入 rag；否则直接去 capability 闸门。
+    """
+    if state.get("human_halt"):
+        return "halt"
+    if state.get("need_rag"):
+        return "rag"
     return "capability"
 
 
@@ -67,6 +80,7 @@ def build_graph():
     graph.add_node("memory", memory_node)
     graph.add_node("rag", rag_node)
     graph.add_node("tool", tool_node)
+    graph.add_node("amap_mcp", amap_mcp_node)
     graph.add_node("response", response_node)
     graph.add_node("save_memory", save_memory_node)
 
@@ -74,6 +88,7 @@ def build_graph():
         ("human_checkpoint_start", human_checkpoint_start),
         ("human_checkpoint_after_planner", human_checkpoint_after_planner),
         ("human_checkpoint_after_rag", human_checkpoint_after_rag),
+        ("human_checkpoint_after_memory", human_checkpoint_after_memory),
         ("human_checkpoint_after_capability", human_checkpoint_after_capability),
         ("human_checkpoint_after_response", human_checkpoint_after_response),
     ]
@@ -102,6 +117,7 @@ def build_graph():
             "rag": "rag",
             "memory": "memory",
             "tool": "tool",
+            "amap_mcp": "amap_mcp",
             "response": "response",
         },
     )
@@ -117,9 +133,22 @@ def build_graph():
         },
     )
 
+    # 仅长期记忆节点：先过 after_memory 闸门，再按需衔接 rag 或直接 capability。
     connect_with_human_gate(
         graph,
-        ["memory", "tool"],
+        ["memory"],
+        "human_checkpoint_after_memory",
+        route_after_memory,
+        {
+            "halt": END,
+            "rag": "rag",
+            "capability": "human_checkpoint_after_capability",
+        },
+    )
+
+    connect_with_human_gate(
+        graph,
+        ["tool", "amap_mcp"],
         "human_checkpoint_after_capability",
         lambda s: route_human_or_next(s, "response"),
         {

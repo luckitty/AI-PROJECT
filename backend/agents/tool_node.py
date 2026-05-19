@@ -12,6 +12,7 @@ def tool_node(state):
         max_chars=2600,
         max_messages=10,
     ).strip()
+    print("tool_node===========conversation_history", conversation_history, "\n")
 
     result = tool_executor.run(
         query,
