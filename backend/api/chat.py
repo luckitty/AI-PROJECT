@@ -219,6 +219,10 @@ async def chat_stream(request: ChatRequest, http_request: Request):
                 pending_resume = None
                 stop_for_client_interrupt = False
                 need_auto_resume = False
+                # 人机断点自动 resume 时切勿在收到 __interrupt__ 后立刻 break 出 for：本轮 graph.stream 生成器
+                # 尚未跑到 StopIteration，失引用时 CPython 会 close 该生成器 → GeneratorExit → pregel 里
+                # ``except BaseException: run_manager.on_chain_error``，LangSmith 整条链标红。应 continue
+                # 把当前迭代器自然耗尽再开下一轮 ``stream(Command(resume=True))``。勿显式 .close()，同理。
                 try:
                     for chunk in stream_iterator:
                         # 客户端一旦中断（前端 AbortController.abort），尽快停止继续消耗模型流。
@@ -235,6 +239,9 @@ async def chat_stream(request: ChatRequest, http_request: Request):
                             and isinstance(payload, dict)
                             and "__interrupt__" in payload
                         ):
+                            # 例如已超过自动 resume 次数并已下发 error 后，仅吞掉后续 updates 直到迭代结束。
+                            if stop_for_client_interrupt:
+                                continue
                             if human_bp:
                                 intr_list = interrupts_to_serializable(
                                     payload["__interrupt__"]
@@ -246,9 +253,11 @@ async def chat_stream(request: ChatRequest, http_request: Request):
                             if auto_resume_steps > MAX_HITL_RESUME_STEPS:
                                 yield f"data: {json.dumps({'error': '人机断点自动恢复次数超过上限'}, ensure_ascii=False)}\n\n"
                                 stop_for_client_interrupt = True
-                                break
+                                # 仍尽量把本轮迭代耗完，减轻未耗尽生成器被 GC close 时的 GeneratorExit 噪音。
+                                continue
                             need_auto_resume = True
-                            break
+                            # 勿 break：须迭代到本轮 stream 自然结束，见上方注释。
+                            continue
                         if mode == "custom" or mode is None:
                             token = sse_payload_from_custom_stream_chunk(
                                 payload if mode == "custom" else chunk
@@ -261,8 +270,6 @@ async def chat_stream(request: ChatRequest, http_request: Request):
                                 interrupt_manager.stop(session_id)
                             break
                 finally:
-                    if stream_iterator is not None and hasattr(stream_iterator, "close"):
-                        stream_iterator.close()
                     stream_iterator = None
 
                 if stop_for_client_interrupt:
@@ -291,9 +298,8 @@ async def chat_stream(request: ChatRequest, http_request: Request):
             )
             yield f"data: {json.dumps({'error': str(e)}, ensure_ascii=False)}\n\n"
         finally:
-            # 主动关闭同步迭代器，尽量触发下游资源释放。
-            if stream_iterator is not None and hasattr(stream_iterator, "close"):
-                stream_iterator.close()
+            # 不显式 close graph.stream 迭代器，避免 GeneratorExit 污染 LangSmith（见内层 while 注释）。
+            stream_iterator = None
 
     return StreamingResponse(
         generate(),

@@ -13,9 +13,10 @@ DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
 # 模型配置
 MODEL_NAME = os.getenv("MODEL_NAME", "deepseek-chat")
 
-# LangSmith 配置（可选）
+# LangSmith 配置（可选）：有 API Key 即打开 LangChain v2 追踪并归到固定项目名
 LANGSMITH_API_KEY = os.getenv("LANGSMITH_API_KEY")
-LANGSMITH_TRACING = os.getenv("LANGSMITH_TRACING", "false")
+LANGCHAIN_TRACING_V2 = os.getenv("LANGCHAIN_TRACING_V2")
+LANGCHAIN_PROJECT = os.getenv("LANGCHAIN_PROJECT")
 
 # 高德api
 AMAP_KEY = os.getenv("AMAP_KEY")
@@ -29,4 +30,5 @@ os.environ["OPENAI_BASE_URL"] = DEEPSEEK_BASE_URL
 
 if LANGSMITH_API_KEY:
     os.environ["LANGSMITH_API_KEY"] = LANGSMITH_API_KEY
-    os.environ["LANGSMITH_TRACING"] = LANGSMITH_TRACING
+    os.environ["LANGCHAIN_PROJECT"] = LANGCHAIN_PROJECT
+    os.environ["LANGCHAIN_TRACING_V2"] = LANGCHAIN_TRACING_V2

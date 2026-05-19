@@ -28,7 +28,7 @@ for p in (str(backend_root), str(repo_root)):
     if p not in sys.path:
         sys.path.insert(0, p)
 
-from agents.planner_node import TRAVEL_RAG_CITY_ALLOWLIST
+from agents.rule.planner_rules import TRAVEL_RAG_CITY_ALLOWLIST
 from rag.travel_cache_retriever import ensure_travel_vectorstore_by_city
 import rag.travel_loader as travel_loader_module
 from rag.offlineCache.travel_ocr import load_ocr_cache, save_ocr_cache

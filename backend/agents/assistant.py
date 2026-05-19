@@ -8,9 +8,10 @@ from langchain.agents import create_agent
 from core.llm import get_llm
 from memory.short_memory import get_short_term_checkpointer
 from tools.tool_registry import REGISTERED_TOOLS
+from mcp_servers.maps_tools import AMAP_MCP_LANGCHAIN_TOOLS
 
-# 与 ToolRegistry 复用同一份工具清单，防止新增工具后两处不一致。
-ALL_TOOLS = REGISTERED_TOOLS
+# 通用工具 + 高德 MCP 工具合并，供 standalone agent 使用。
+ALL_TOOLS = [*REGISTERED_TOOLS, *AMAP_MCP_LANGCHAIN_TOOLS]
 
 
 default_agent_singleton = None

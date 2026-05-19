@@ -49,6 +49,7 @@ class ToolRegistry:
         """
         tool_descriptions = self.get_tool_descriptions()
         ch = (conversation_history or "").strip()
+        print("tool_registry===========ch", ch, "\n")
         history_block = ""
         if ch:
             history_block = (

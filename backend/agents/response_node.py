@@ -13,6 +13,7 @@ from graph.chat_messages import (
     format_conversation_for_prompt,
 )
 from tools.search_travel_tool import search_travel
+from tools.travel_personal_map_builder import AMAP_PERSONAL_MAP_OFFER_TEXT
 
 # 流式下发分片：进一步降低聚合阈值，减少首字与段落间等待，提升“更跟手”的体感。
 # 这里取 8 字 + 6ms，兼顾连贯性与发送频率，避免出现明显“攒一包再吐”的停顿。
@@ -101,6 +102,36 @@ def response_node(state, config: RunnableConfig):
             "messages": [AIMessage(content=interrupted_text)],
         }
 
+    # 用户拒绝导入高德专属地图：短回复并清除待确认状态。
+    if state.get("decline_amap_personal_map"):
+        decline_text = "好的，暂不生成专属地图。如需导入高德，随时跟我说即可。"
+        stream_plain_text_via_custom(writer, session_id, decline_text)
+        return {
+            **state,
+            "messages": [AIMessage(content=decline_text)],
+            "decline_amap_personal_map": False,
+            "pending_amap_personal_map_offer": False,
+            "last_travel_guide_for_map": "",
+        }
+
+    # 专属地图已生成：直出 MCP 返回的唤端链接，勿经二次 LLM 改写。
+    if state.get("amap_personal_map_ready"):
+        link_body = (state.get("tool_result") or "").strip()
+        if link_body:
+            map_reply = (
+                "已为你生成高德专属地图，请使用手机打开以下链接：\n\n"
+                f"{link_body}"
+            )
+        else:
+            map_reply = "专属地图生成未完成，请稍后重试或说明要导入的行程要点。"
+        stream_plain_text_via_custom(writer, session_id, map_reply)
+        return {
+            **state,
+            "messages": [AIMessage(content=map_reply)],
+            "amap_personal_map_ready": False,
+            "last_travel_guide_for_map": "",
+        }
+
     # 旅游攻略统一入口：search_travel 内部等价 stream_travel_guide_llm + 素材组装；rag_context 可为空（非六城或未召回）。
     if bool(state.get("travel_itinerary_in_response")) or bool(state.get("need_rag")):
         stream_writer = writer if bool(state.get("stream_sink_active")) else None
@@ -131,7 +162,16 @@ def response_node(state, config: RunnableConfig):
             "response_node===========旅游攻略（search_travel 单次模型）总耗时: "
             f"{time.perf_counter() - invoke_start_at:.2f}s, answer长度: {len(out)}"
         )
-        patch: dict = {"messages": [AIMessage(content=out)]}
+        # 攻略输出完成后追加 ChatGPT 式追问，并记下正文供用户确认后导入高德。
+        offer_suffix = "" if coerced_stop else AMAP_PERSONAL_MAP_OFFER_TEXT
+        if offer_suffix:
+            stream_plain_text_via_custom(writer, session_id, offer_suffix)
+        full_answer = out + offer_suffix
+        patch: dict = {
+            "messages": [AIMessage(content=full_answer)],
+            "pending_amap_personal_map_offer": bool(offer_suffix),
+            "last_travel_guide_for_map": guide if offer_suffix else "",
+        }
         if coerced_stop:
             patch["human_halt"] = True
         return {**state, **patch}

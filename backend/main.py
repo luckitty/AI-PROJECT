@@ -9,6 +9,9 @@ import os
 # 添加项目根目录到 Python 路径
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# 必须在 import LangChain / LangGraph 之前执行：加载 .env 并写入 LangSmith 相关 os.environ
+import core.config  # noqa: E402
+
 # 进程级日志：uvicorn 启动时也会打访问日志，此处统一根 logger 格式，便于容器/终端排查异常堆栈
 logging.basicConfig(
     level=logging.INFO,
