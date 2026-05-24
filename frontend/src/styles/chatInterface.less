@@ -586,6 +586,31 @@
   text-decoration: underline;
 }
 
+/* 攻略末尾「可以」等快捷回复：外观像链接，点击代发用户消息 */
+.message-text :deep(.chat-quick-reply),
+.message-text-streaming :deep(.chat-quick-reply) {
+  appearance: none;
+  border: none;
+  background: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.message-text :deep(.chat-quick-reply:hover:not(:disabled)),
+.message-text-streaming :deep(.chat-quick-reply:hover:not(:disabled)) {
+  color: var(--accent-hover);
+}
+
+.message-text :deep(.chat-quick-reply:disabled),
+.message-text-streaming :deep(.chat-quick-reply:disabled) {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .message-text :deep(pre),
 .message-text-streaming :deep(pre) {
   background-color: var(--bg-code-block);

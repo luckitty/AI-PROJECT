@@ -54,10 +54,7 @@ def buildCombinedTravelSkillInstruction() -> str:
         "========== 专项二：餐饮规划 ==========\n"
         f"{diningBody}\n\n"
         "========== 合成输出要求 ==========\n"
-        "- 按「第 N 天」组织：先写行程 skill 的「游玩安排 + 路线小结」，"
-        "再写餐饮 skill 的「美食推荐」。\n"
-        "- 检索素材中的事实优先；素材不足时用常识补充，勿编造素材中不存在的关键店名/景点。\n"
-        "- 全文精炼；禁止 JSON；不要用 markdown 代码块包裹全文。\n"
+        "将以上两份 skill 合成一篇攻略，严格按各 skill 规定的 Day 结构与全文顺序输出。\n"
     )
     # 终端可搜 travel_skills=========== 确认本次攻略是否挂载双 skill（重启 main.py 后生效）。
     print(

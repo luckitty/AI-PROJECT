@@ -1,6 +1,6 @@
 # travel-guide-agent（旅游攻略助手）
 
-基于 **FastAPI + Vue 3 + Vite** 的对话应用：前端为类 DeepSeek 的聊天界面；后端对话主路径为 **LangGraph 节点编排**（`planner` → `memory` / `rag` / `tool` → `response` → `save_memory`），底层模型走 **DeepSeek 兼容 OpenAI 接口**。支持 **短期会话检查点（Redis）**、**本地 RAG（Milvus + 混合检索 + 可选重排）** 与 **天气 / 演示股价 / 联网搜索** 等工具。
+基于 **FastAPI + Vue 3 + Vite** 的对话应用：前端为类 DeepSeek 的聊天界面；后端对话主路径为 **LangGraph 节点编排**（`planner` → `memory` / `rag` / `amap_mcp` / `tool` → `response` → `save_memory`），底层模型走 **DeepSeek 兼容 OpenAI 接口**。支持 **短期会话检查点（Redis）**、**本地 RAG（Milvus + 混合检索 + 可选重排）**、**高德 MCP（天气/POI/算路）** 与 **联网搜索** 等工具。
 
 ---
 
@@ -10,9 +10,9 @@
 |------|------|
 | 对话 | 非流式 `POST /api/chat`、流式 `POST /api/chat/stream`（SSE，行内 `data: {"content":...}`，结束 `data: [DONE]`） |
 | 请求体 | `message`、`model`、`session_id`、`user_id`（可选，长期记忆等场景用） |
-| 编排 | `planner` 输出 `need_rag` / `need_tool` / `need_memory`，动态路由到对应节点后再汇总到 `response` |
+| 编排 | `planner` 输出 `need_rag` / `need_tool` / `need_amap_mcp` / `need_memory` 等，动态路由到对应节点后再汇总到 `response` |
 | 短期记忆 | LangGraph 使用 **RedisSaver** 检查点，按 `thread_id`（与前端 `session_id` 对齐）持久化；需 **Redis Stack**（含 RediSearch + RedisJSON） |
-| 工具 | `tool` 节点：`get_weather`（高德）、`get_stock_price`（演示数据）、`web_search` |
+| 工具 | `amap_mcp` 节点：高德 MCP（天气、POI、算路等）；`tool` 节点：`web_search` 联网检索 |
 | RAG | `rag` 节点：`data` 目录文档 → 嵌入（智谱）→ **Milvus** 向量库；BM25 + 向量混合检索，可选 CrossEncoder 精排（`USE_RERANKER`） |
 | 前端 | Markdown（marked + DOMPurify）、流式打字机、侧边栏会话、模型与非流式/流式切换 |
 
@@ -40,7 +40,8 @@ travel-guide-agent/
 │   │   ├── redis_config.py        # REDIS_URL、TTL
 │   │   └── long_memory*.py        # 长期记忆相关（按需启用）
 │   ├── rag/                       # 加载、混合检索、Milvus、重排
-│   ├── tools/                     # 天气、股票、联网搜索、ToolRegistry
+│   ├── tools/                     # 联网搜索、ToolRegistry；天气/算路见 mcp_servers
+│   ├── mcp_servers/               # 高德 streamable HTTP MCP 客户端与 LangChain 封装
 │   ├── data/                      # RAG 原始文本（按需增删后重建/写入 Milvus）
 │   └── requirements.txt           # 部分依赖声明（见下「安装」）
 ├── frontend/
