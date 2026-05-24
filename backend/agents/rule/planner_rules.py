@@ -185,7 +185,7 @@ AMAP_MCP_POI_GEO_SUBSTRINGS = (
     "酒店推荐",
 )
 
-# 问实况/预报/穿衣等气象信息；与 route_fast_path 的 block_words 对齐，规则层优先走工具。
+# 问实况/预报/穿衣等气象信息；规则层统一走高德 MCP（amap_mcp_weather）。
 WEATHER_INTENT_SUBSTRINGS = (
     "天气",
     "气温",
@@ -400,17 +400,18 @@ def infer_router_plan_by_rules(state: dict, query: str) -> dict | None:
             "need_history": False,
         }
 
+    # 纯通勤算路：高德 MCP（geo + transit 等），勿进旅游 RAG 与攻略长模板。
     if looksLikeCommuteOnly(q):
         return {
             "need_rag": False,
-            "need_tool": True,
-            "need_amap_mcp": False,
+            "need_tool": False,
+            "need_amap_mcp": True,
             "need_memory": False,
             "need_travel_itinerary": False,
             "need_history": True,
         }
 
-    # 高德 MCP：多日天气、POI 搜、地理编码等。
+    # 高德 MCP：天气、POI 搜、地理编码、公交路径规划等。
     if looksLikeAmapMcpQuery(q):
         return {
             "need_rag": False,
@@ -421,12 +422,12 @@ def infer_router_plan_by_rules(state: dict, query: str) -> dict | None:
             "need_history": False,
         }
 
-    # 实况天气：走 get_weather，勿进旅游 RAG 与攻略长模板。
+    # 天气（含实况与多日预报）：统一走高德 MCP，勿进旅游 RAG 与攻略长模板。
     if looksLikeWeatherQuery(q):
         return {
             "need_rag": False,
-            "need_tool": True,
-            "need_amap_mcp": False,
+            "need_tool": False,
+            "need_amap_mcp": True,
             "need_memory": False,
             "need_travel_itinerary": False,
             "need_history": False,

@@ -166,7 +166,7 @@
         </svg>
       </button>
 
-      <div class="messages-container" ref="messagesContainer">
+      <div class="messages-container" ref="messagesContainer" @click="onMessagesContainerClick">
         <div v-if="messages.length === 0" class="welcome-message">
           <div class="welcome-inner">
             <!-- 品牌 Logo：静态资源置于 frontend/public，构建后由根路径提供 -->
@@ -413,11 +413,23 @@ const toggleSidebar = () => {
   footerMenuOpen.value = false
 }
 
+// chat-reply 链接协议：Markdown 链接触发前端代发用户短回复（如攻略末尾「可以」）。
+const QUICK_REPLY_LINK_RE = /<a href="chat-reply:([^"]+)">([\s\S]*?)<\/a>/g
+
+function convertQuickReplyLinks(html) {
+  return html.replace(QUICK_REPLY_LINK_RE, (_, replyEncoded, label) => {
+    const reply = decodeURIComponent(replyEncoded)
+    const safeReply = reply.replace(/"/g, '&quot;')
+    return `<button type="button" class="chat-quick-reply" data-reply="${safeReply}">${label}</button>`
+  })
+}
+
 // 统一 Markdown 渲染入口：普通消息使用缓存 html，流式消息使用 streamingHtml。
 const renderMessage = (content) => {
   if (!content) return ''
   const html = marked.parse(content)
-  return DOMPurify.sanitize(html)
+  const withQuickReplies = convertQuickReplyLinks(html)
+  return DOMPurify.sanitize(withQuickReplies, { ADD_ATTR: ['data-reply'] })
 }
 
 // 统一创建可渲染消息，提前缓存 html，避免模板阶段反复执行 markdown 解析。
@@ -689,6 +701,22 @@ const sendMessageStream = async () => {
 }
 
 const sendMessage = sendMessageStream
+
+/** 点击消息内快捷回复按钮：填入文案并走正常发送流程。 */
+async function sendQuickReply(reply, btn) {
+  if (isTyping.value || !String(reply || '').trim()) return
+  if (btn) btn.disabled = true
+  userInput.value = String(reply).trim()
+  await sendMessage()
+}
+
+/** 消息区事件委托：捕获 chat-quick-reply 按钮点击。 */
+function onMessagesContainerClick(e) {
+  const btn = e.target?.closest?.('.chat-quick-reply')
+  if (!btn) return
+  e.preventDefault()
+  void sendQuickReply(btn.getAttribute('data-reply'), btn)
+}
 
 /**
  * 发送与停止共用按钮：

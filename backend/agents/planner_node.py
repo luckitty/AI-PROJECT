@@ -67,29 +67,28 @@ def build_router_prompt(history_section: str, query: str) -> str:
         - 服务端可能用规则覆盖 need_history，你仍按语义照常输出。
 
         【按场景判定】（命中即采用对应组合，其余未列字段均为 false）
-        A. 实况天气（今天/现在/穿衣建议等）→ need_tool=true
-        B. 多日天气（未来几天/预报/趋势/一周）→ need_amap_mcp=true
-        C. 两地通勤算路（句中可看成两个具体地名之间的走/去/打车/多久；含指代上文某段路）→ need_tool=true
-        D. 高德 MCP（POI 搜、周边搜、地理编码、公交路径规划、专属地图）→ need_amap_mcp=true
-        E. 六城旅游攻略（目的地为 {cities}，且问攻略/行程/怎么玩/景点美食推荐）→ need_rag=true，need_travel_itinerary=true，need_memory=true（结合用户偏好）
-        F. 非六城旅游攻略（如新疆、成都、深圳等，或泛问旅游但未落在上述六城）→ need_rag=false，need_travel_itinerary=true，need_memory=true
-        G. 延续上文改行程结构（对话里已有行程，用户问几天怎么排、景点顺序、加减景点、时间够不够）→ need_travel_itinerary=true，need_memory=true
-        H. 联网检索等非地图类外部信息 → need_tool=true
-        I. 读取或写入用户长期记忆 → need_memory=true
-        J. 与旅游/工具无关的闲聊、编程、解题等 → 各路由字段均为 false
+        A. 天气（实况/多日预报/穿衣建议等）→ need_amap_mcp=true
+        B. 两地通勤算路（句中可看成两个具体地名之间的走/去/打车/多久；含指代上文某段路）→ need_amap_mcp=true
+        C. 高德 MCP（POI 搜、周边搜、地理编码、公交路径规划、专属地图）→ need_amap_mcp=true
+        D. 六城旅游攻略（目的地为 {cities}，且问攻略/行程/怎么玩/景点美食推荐）→ need_rag=true，need_travel_itinerary=true，need_memory=true（结合用户偏好）
+        E. 非六城旅游攻略（如新疆、成都、深圳等，或泛问旅游但未落在上述六城）→ need_rag=false，need_travel_itinerary=true，need_memory=true
+        F. 延续上文改行程结构（对话里已有行程，用户问几天怎么排、景点顺序、加减景点、时间够不够）→ need_travel_itinerary=true，need_memory=true
+        G. 联网检索等非地图类外部信息 → need_tool=true
+        H. 读取或写入用户长期记忆 → need_memory=true
+        I. 与旅游/工具无关的闲聊、编程、解题等 → 各路由字段均为 false
 
         【字段说明】（场景未覆盖时再参考）
-        - need_rag：仅 E 类为 true；其它地区攻略、天气、通勤、POI 均为 false。
-        - need_travel_itinerary：E/F/G 为 true；纯天气、纯通勤、纯 POI 必须为 false。
-        - need_tool：A/C/H 为 true；含 get_weather、web_search、amap_route 算路。
-        - need_amap_mcp：B/D 为 true；含多日天气、POI/地理、公交路径规划、专属地图。
-        - need_memory：I 类为 true；E/F/G 类也必须为 true（攻略与行程调整需结合用户长期记忆）。
+        - need_rag：仅 D 类为 true；其它地区攻略、天气、通勤、POI 均为 false。
+        - need_travel_itinerary：D/E/F 为 true；纯天气、纯通勤、纯 POI 必须为 false。
+        - need_tool：仅 G 为 true；含 web_search 联网检索。
+        - need_amap_mcp：A/B/C 为 true；含天气、通勤算路、POI/地理、公交路径规划、专属地图。
+        - need_memory：H 类为 true；D/E/F 类也必须为 true（攻略与行程调整需结合用户长期记忆）。
         - need_history：终稿是否需要多轮对话。true=依赖上文（指代、改行程、续问）；false=当前一句可独立作答。
 
         【易混边界】（仅保留规则层未覆盖的歧义 case）
-        - 上文已有行程，问「上面的路线怎么走/这段坐地铁怎么去」→ C（need_tool=true），不是 G。
-        - 「杭州有什么好吃的餐厅」→ D（POI 搜），不是 F（整篇攻略）。
-        - 「北京未来几天天气」→ B，不是 E；「上海今天天气」→ A，不是 F。
+        - 上文已有行程，问「上面的路线怎么走/这段坐地铁怎么去」→ B（need_amap_mcp=true），不是 F。
+        - 「杭州有什么好吃的餐厅」→ C（POI 搜），不是 E（整篇攻略）。
+        - 「北京未来几天天气」→ A，不是 D；「上海今天天气」→ A，不是 E。
 
         【输出】仅一行 JSON，不要解释，不要 Markdown 代码块；必须且只含六个键。
         当前用户句（对话最后一轮「用户：」与之冲突时以对话为准）：{query}

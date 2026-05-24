@@ -1,6 +1,6 @@
 # travel-guide-agent（旅游攻略助手）
 
-基于 **FastAPI + Vue 3 + Vite** 的对话应用：前端为类 DeepSeek 的聊天界面；后端对话主路径为 **LangGraph** 编排——入口经人机闸门与对话压缩后进入 **`planner`**，按计划在 **`memory` / `rag` / `tool`** 与 **`response`** 之间流转，最后 **`save_memory`** 收口。底层对话模型走 **DeepSeek 兼容 OpenAI 接口**；RAG 嵌入可走 **智谱**；短期会话检查点使用 **Redis（需 Stack：RediSearch + RedisJSON）**；向量库默认 **Milvus**。
+基于 **FastAPI + Vue 3 + Vite** 的对话应用：前端为类 DeepSeek 的聊天界面；后端对话主路径为 **LangGraph** 编排——入口经人机闸门与 **`conversation_compress`** 后进入 **`planner`**，按计划在 **`memory` / `rag` / `amap_mcp` / `tool`** 与 **`response`** 之间流转，最后 **`save_memory`** 收口。底层对话模型走 **DeepSeek 兼容 OpenAI 接口**；RAG 嵌入可走 **智谱**；短期会话检查点使用 **Redis Stack（RediSearch + RedisJSON）**；向量库默认 **Milvus**；地图能力统一经 **高德 MCP（streamable HTTP）**。
 
 ---
 
@@ -10,11 +10,14 @@
 |------|------|
 | 对话 | 非流式 `POST /api/chat`；流式 `POST /api/chat/stream`（SSE：`data: {"content":...}` 或控制字段，结束 `data: [DONE]`） |
 | 请求体 | `message`、`model`、`session_id`、`user_id`（可选）；`resume`（恢复人机断点）；`human_breakpoints`（是否在 SSE 中透出 interrupt，默认服务端自动 resume） |
-| 编排 | `conversation_compress` → `planner` → 按需 `rag` / `memory` / `tool` → `response` → `save_memory`；各阶段可插入人机闸门（`interrupt()`） |
+| 编排 | `conversation_compress` → `planner` → 按需 `rag` / `memory` / `amap_mcp` / `tool` → `response` → `save_memory`；各阶段可插入人机闸门（`interrupt()`） |
 | 旅游攻略 | `response` 节点在攻略场景下调用 **`search_travel`**，结合离线旅游缓存与行程拼装（见 `tools/search_travel_tool.py`、`rag/travel_cache_retriever.py`） |
-| 本地旅游 RAG | `planner` 仅在用户语句命中 **北京 / 广州 / 杭州 / 上海 / 西安 / 长沙** 之一时置 `need_rag`，其余攻略倾向由终稿路径处理（见 `agents/planner_node.py`） |
-| 工具 | `get_weather`（高德）、`web_search`、`amap_route`（起终点路线摘要）；注册表见 `tools/tool_registry.py` |
-| 会话控制 | `GET /api/chat/stop?session_id=` 配合前端 Abort；同用户新会话可打断旧会话（`interrupt_manager`） |
+| 本地旅游 RAG | `planner` 仅在用户语句命中 **北京 / 广州 / 杭州 / 上海 / 西安 / 长沙** 之一时置 `need_rag`，其余攻略由终稿路径处理（见 `agents/planner_node.py`） |
+| 高德 MCP | `amap_mcp` 节点：天气、POI 搜/详情、周边搜、地理编码、公交路径、专属地图等（见 `mcp_servers/amap_mcp_registry.py`） |
+| 工具 | `tool` 节点：`web_search` 联网检索；注册表见 `tools/tool_registry.py` |
+| 短期记忆 | LangGraph **RedisSaver** 检查点，按 `thread_id`（与前端 `session_id` 对齐）持久化 |
+| RAG | `rag` 节点：`data` 目录文档 → 嵌入（智谱）→ **Milvus**；BM25 + 向量混合检索，可选 CrossEncoder 精排（`USE_RERANKER`） |
+| 会话控制 | `GET /api/chat/stop?session_id=` 配合前端 Abort；同用户新会话可打断旧会话（`interruptController`） |
 | 前端 | Markdown（marked + DOMPurify）、流式输出、侧边栏会话、模型与非流式/流式切换；`VITE_API_BASE_URL` 指向后端 |
 
 ---
@@ -29,10 +32,10 @@ travel-guide-agent/
 │   ├── graph/
 │   │   ├── builder.py             # StateGraph：人机闸门 + compress + planner → … → save_memory
 │   │   ├── orchestrator.py        # AgentOrchestrator：invoke / stream（updates + custom）
-│   │   ├── router.py              # planner 出边路由
+│   │   ├── router.py              # planner 出边路由（rag / memory / amap_mcp / tool / response）
 │   │   ├── state.py               # AgentState
 │   │   └── interrupt.py           # 人机闸门节点
-│   ├── agents/                    # planner、memory、rag、tool、response、save_memory 等节点
+│   ├── agents/                    # planner、memory、rag、amap_mcp、tool、response、save_memory 等
 │   ├── core/config.py             # dotenv 加载 API Key / 模型名等
 │   ├── core/llm.py                # ChatOpenAI（DeepSeek）
 │   ├── memory/
@@ -40,11 +43,16 @@ travel-guide-agent/
 │   │   ├── redis_config.py        # REDIS_URL、TTL
 │   │   └── long_memory*.py        # 长期记忆（按需）
 │   ├── rag/                       # 加载、混合检索、Milvus、旅游离线缓存等
-│   ├── tools/                     # 天气、联网、高德路线、ToolRegistry、search_travel
+│   ├── tools/                     # 联网搜索、ToolRegistry、search_travel、行程拼装等
+│   ├── mcp_servers/               # 高德 streamable HTTP MCP 客户端与 LangChain 封装
+│   ├── tool_registry/mcp/         # 地图类 @tool 封装（供节点与 builder 调用）
 │   ├── data/                      # RAG 文本、城市缓存、POI 等数据文件
 │   ├── interruptController/       # 会话 stop / 用户活跃会话绑定
 │   └── requirements.txt           # 部分依赖声明（安装时按报错补全主栈）
-├── frontend/                      # Vue 3 + Vite（开发端口 3000）
+├── frontend/
+│   ├── src/components/ChatInterface.vue
+│   ├── src/api/chat.js            # axios + fetch(SSE)，VITE_API_BASE_URL
+│   └── vite.config.js             # 开发端口 3000
 ├── docker-compose.yml             # Milvus standalone（etcd + minio + milvus）
 ├── start.sh / start.bat           # 根目录检查 .env 后拉起 backend + frontend
 └── README.md
@@ -60,7 +68,7 @@ travel-guide-agent/
 - **Python** 建议 **3.11+**
 - **Redis Stack**（含 **RediSearch、RedisJSON**），供 LangGraph `RedisSaver`；连接默认见下方 `redis_config.py`
 - **Milvus**：RAG / 向量检索默认连接本机或配置的实例；仓库提供 **`docker-compose.yml`** 一键起 Milvus 依赖组件
-- 网络：需能访问 **DeepSeek API**；嵌入使用 **智谱** 时需可达智谱接口；天气与路线依赖 **高德 Key**
+- 网络：需能访问 **DeepSeek API**；嵌入使用 **智谱** 时需可达智谱接口；地图与天气依赖 **高德 MCP**（`AMAP_KEY` 等，见 `mcp_servers/config.py`）
 
 ---
 
@@ -75,7 +83,7 @@ travel-guide-agent/
 | `MODEL_NAME` | 可选，默认 `deepseek-chat` |
 
 | `ZHIPU_API_KEY` | RAG 向量嵌入（智谱 `embedding-3`）需要 |
-| `AMAP_KEY` | 天气工具（高德）需要 |
+| `AMAP_KEY` | 高德 MCP / 地图工具需要 |
 | `USE_RERANKER` | 设为 `0` / `false` 等可关闭 CrossEncoder 精排，加快启动、省资源 |
 | `LANGSMITH_API_KEY` | 可选：填写即开启 LangSmith 追踪（内部会设 `LANGCHAIN_TRACING_V2=true`）；项目名见 `backend/core/config.py` 中 `LANGCHAIN_PROJECT` |
 
@@ -166,7 +174,8 @@ npm run build
 2. **流式**：`stream_mode=["updates", "custom"]`；`response`（等）通过 **`get_stream_writer`** 写入 `custom` 增量；API 层将增量封装为 SSE JSON。
 3. **人机协作**：图中多处 **`human_checkpoint_*`**；非流式可在服务端循环 `Command(resume=True)` 直到完成；流式默认自动 resume，次数上限见 **`MAX_HITL_RESUME_STEPS`**（`graph/orchestrator.py`）。
 4. **RAG 与攻略**：通用 RAG 节点与 **`travel_cache_retriever` / 离线缓存** 协同；攻略素材组装与行程指令见 **`tools/search_travel_tool.py`**、**`tools/travel_itinerary_builder.py`**。离线构建脚本位于 **`backend/tools/offlineTool/`**、**`backend/rag/offlineCache/`**。
-5. **`create_assistant`**（`agents/assistant.py`）：保留单 Agent + 工具实现；当前 HTTP 主路径以 **图编排 `AgentOrchestrator`** 为准（见 `api/chat.py`）。
+5. **地图能力**：天气、POI、算路等由 **`amap_mcp`** 节点经 MCP 调用，不再走独立 `weather_tool` / `amap_route_tool`。
+6. **`create_assistant`**（`agents/assistant.py`）：保留单 Agent + 工具实现；当前 HTTP 主路径以 **图编排 `AgentOrchestrator`** 为准（见 `api/chat.py`）。
 
 ---
 
@@ -183,7 +192,7 @@ npm run build
 1. **DeepSeek / 智谱 / 高德** Key 未配置时，对应能力会失败或降级，需在日志中排查。
 2. **Redis** 必须为 **Stack** 能力集；纯官方 `redis` 镜像无搜索模块时，检查点初始化可能失败。
 3. **CORS** 当前为宽松配置（`allow_origins=["*"]`），生产环境请按域名收紧。
-4. 路线工具 **`amap_route`** 需要用户在问题中可分辨的起点、终点与城市信息；复杂指代依赖多轮节选（见 `ToolRegistry.select_tool`）。
+4. **算路与 POI**：`planner` 将天气、两地通勤、POI/周边搜等路由到 **`need_amap_mcp`**；复杂地名指代依赖多轮对话节选（见 `amap_mcp_registry` 与 `planner_node` 场景说明）。
 
 ## License
 

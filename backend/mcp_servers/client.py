@@ -115,11 +115,6 @@ async def with_amap_maps_session(
         ):
             async with ClientSession(read_stream, write_stream) as session:
                 await session.initialize()
-                print(
-                    "amap_maps_mcp===========session",
-                    get_session_id() if get_session_id else None,
-                    "\n",
-                )
                 return await callback(session)
 
 
@@ -159,7 +154,6 @@ async def call_amap_maps_tool_async(
 
     async def runner(session: ClientSession) -> str:
         result = await session.call_tool(name, payload)
-        print("amap_maps_mcp===========result \n", result, "\n")
         return text_from_call_tool_result(result)
 
     try:
